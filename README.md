@@ -1,4 +1,4 @@
-# Fast as CHITA: Neural Network Pruning with Combinatorial Optimization
+# DCADP
 
 This is the offical repo of the  paper **DCADP**
 
