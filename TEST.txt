@@ -1,0 +1,33 @@
+node3
+0
+0_0
+0.1
+12073
+RUNNING FILE: /share/home/fanxilai_lsec/SMSB_Final/run_experiment_gradual.py
+DEBUG: dis_num argument registered
+/share/home/fanxilai_lsec/SMSB_Final/run_experiment_gradual.py
+Using local imagenet
+Do log softmax:  True
+Using device  cuda
+/share/home/fanxilai_lsec/SMSB_Final/models/mlpnet.py:45: UserWarning: Implicit dimension choice for log_softmax has been deprecated. Change the call to include dim=X as an argument.
+  return F.log_softmax(x)
+Dense test accuracy 93.97  computation time :  3.085805654525757
+seed,fisher_size, num_stages,num_iterations,sparsity,l2,sparsity_schedule,algo 2 (500, 16) 1 1 0.7 0.0001 poly SMSB
+sparsities: [0.7]
+0.1 1e-05 ----<>
+Initial Model has sparsity 0.0  at rank 0
+Computing gradients 0
+Computing gradients 100
+Computing gradients 200
+Computing gradients 300
+Computing gradients 400
+Grad computation took  2.1718811988830566
+Starting Optimization
+sp: 0.7 k: 9708
+sp: 0.7 k: 9708 dis num: 7
+OneStep S-Sparse-Binary Start:
+Cons Res Satisfy
+Stage took 126.65168642997742
+/share/home/fanxilai_lsec/SMSB_Final/models/mlpnet.py:45: UserWarning: Implicit dimension choice for log_softmax has been deprecated. Change the call to include dim=X as an argument.
+  return F.log_softmax(x)
+Stage k 9708 89.14

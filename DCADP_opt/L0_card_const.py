@@ -46,6 +46,7 @@ parser.add_argument('--seed', type=int, nargs='+')
 parser.add_argument('--first_order_term', type=lambda x: (str(x).lower() == 'true'), nargs='+')
 parser.add_argument('--sparsity', type=float, nargs='+')
 parser.add_argument('--base_level', type=float, default=0.1) ##In correspondance with sparsity
+parser.add_argument('--dis_num',type=int, default=0)
 parser.add_argument('--outer_base_level',type=float,default=0.5)
 parser.add_argument('--l2', type=float, nargs='+')
 parser.add_argument('--sparsity_schedule', type=str, nargs='+')
@@ -731,15 +732,7 @@ def SM_LinfProj(what, shat, K, M, base_len):
         Pieces.append(sort_what_abs[(M-1)*base_len:])
     else:
         Pieces.append(sort_what_abs)
-    """
-    for i in range(M):
-        if i < M-1:
-            end = start + base_len
-        else:
-            end = len(what)
-        Pieces.append(sort_what_abs[start:end])#每个Piece里都是绝对值，从大到小
-        start = end
-    """
+
     # 预分配 w 数组
     w_new = np.zeros_like(what)
     s_arr = np.zeros_like(shat)
@@ -758,201 +751,14 @@ def SM_LinfProj(what, shat, K, M, base_len):
     
     return w_new, s_arr, top_K_idx
 
-#只有一个s,single-PPA-FISTA求解Sparse-Binary-新DCA问题的子问题
-def Oldsol_subproblem(y, grads, w_start, w_bar, s_start, r_start, s_vec, L, lambda2, K, sub_rho1, sub_rho2, epsilon):
-    w_now = w_start.copy()
-    w_old = w_start.copy()
-    s_now = s_start
-    s_old = s_now
-    w_rho = w_start.copy()
-    s_rho = s_start
-    r_rho = r_start.copy()
-    f_rho = 0
-    r_now = r_start.copy()
-    top_K_idx = np.zeros(K)
-    objs = []
-    step_BB = 0 
-    step_old = 0
-    f_old = 0.5*r_now@r_now + lambda2*np.dot(w_now-w_bar,w_now-w_bar) + sub_rho2*s_now - np.dot(w_now, s_vec)
-    f_trial = 0
-    itr_in = 1
-    c = 1e-4
-
-    stopFlag = False
-    while True:
-
-        step = min(1/L, s_now/sub_rho2)
-        itr_search = 0
-        w_FISTA = w_now + (itr_in - 2)/(itr_in + 1)*(w_now - w_old)
-        s_FISTA = s_now + (itr_in - 2)/(itr_in + 1)*(s_now - s_old)
-        r_FISTA = y - grads@w_FISTA
-        f_FISTA = 0.5 * r_FISTA @ r_FISTA + lambda2 * np.dot(w_FISTA-w_bar, w_FISTA-w_bar) + sub_rho2 * s_FISTA  - np.dot(w_FISTA, s_vec)
-        gradf_wFISTA = -grads.T@r_FISTA + 2 * lambda2 * (w_FISTA - w_bar)  - s_vec
-        while True:
-            itr_search += 1
-            
-            w_hat = w_FISTA - gradf_wFISTA * step
-            s_hat = s_FISTA - sub_rho2 * step
-
-            what_prox = np.sign(w_hat) * np.maximum(np.abs(w_hat) - step * sub_rho1, 0)
-            w_trial, s_trial, top_K_idx = sLinf_Proj(what_prox, s_hat, K)
-            #d = w_trial - w_now
-            r_trial = y - grads @ w_trial
-            f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar)  + sub_rho2 * s_trial  - np.dot(w_trial, s_vec)
-            #f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar) + sub_rho1 * np.sum(np.abs(w_trial)) + sub_rho2 * s_trial  - np.dot(w_trial, s_vec)
-
-            if abs(step) <= 1e-8:
-            #if step <= 1e-4 * min(1/L, s_now/sub_rho):
-                step = min(1/L, s_now/sub_rho2)
-                w_hat = w_FISTA - gradf_wFISTA * step
-                s_hat = s_FISTA - sub_rho2 * step
-                what_prox = np.sign(w_hat) * np.maximum(np.abs(w_hat) - step * sub_rho1, 0)
-                w_trial, s_trial, top_K_idx = sLinf_Proj(what_prox, s_hat, K)
-                r_trial = y - grads @ w_trial
-                f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar) + sub_rho1 * np.sum(np.abs(w_trial)) + sub_rho2 * s_trial  - np.dot(w_trial, s_vec)
-                print('Sub Armijo Failed,f_trial:',f_trial)
-                break
-
-
-            if f_trial <= f_FISTA + np.dot(gradf_wFISTA, w_trial - w_FISTA) + sub_rho2 * (s_trial-s_FISTA) + (np.dot(w_trial-w_FISTA,w_trial-w_FISTA) + (s_trial-s_FISTA)**2)/(2*step):
-
-                
-                itr_in += 1
-                objs.append(f_trial)
-                break
-            else:
-                step *= 0.5
-
-
-        if abs(f_trial-f_old) <= max(epsilon, 1e-5):
-        #if abs(f_trial-f_old) <= 1e-4:
-            w_rho = w_trial
-            r_rho = r_trial
-            s_rho = s_trial
-            f_rho = f_trial
-            break
-
-        #gradf_wold = gradf_wnow.copy()
-        f_old = f_trial
-        w_old = w_now.copy()
-        r_old = r_now.copy()
-        s_old = s_now
-        w_now = w_trial.copy()
-        r_now = r_trial.copy()
-        s_now = s_trial
-    return w_rho, s_rho, r_rho, top_K_idx, f_rho, stopFlag
-
-#single-PPA-FISTA求解Sparse-Binary-新DCA问题的子问题
-def sol_subproblem(y, grads, w_start, w_bar, s_start, r_start, s_vec, L, lambda2, K, sub_rho1, sub_rho2, epsilon, M, base_len, lengths):
-    w_now = w_start.copy()
-    w_old = w_start.copy()
-    s_now = s_start.copy()
-    s_now = np.sort(s_now)[::-1]
-    s_old = s_now.copy()
-    w_rho = w_start.copy()
-    s_rho = s_now.copy()
-    r_rho = r_start.copy()
-    f_rho = 0
-    r_now = r_start.copy()
-    top_K_idx = np.zeros(K)
-    objs = []
-    step_BB = 0 
-    step_old = 0
-    s_sum = np.sum(lengths * s_now)#lengths为前K个最大绝对值的各分组长度, 目标函数中金计算前K个里的分组个数
-    f_old = 0.5*r_now@r_now + lambda2*np.dot(w_now-w_bar,w_now-w_bar) + sub_rho2/K*s_sum - np.dot(w_now, s_vec)
-    f_trial = 0
-    itr_in = 1
-    c = 1e-4
-    
-    stopFlag = False
-    while True:
-
-        #step = min(1/L, s_now/sub_rho2)
-        itr_search = 0
-        w_FISTA = w_now + (itr_in - 2)/(itr_in + 1)*(w_now - w_old)
-        s_FISTA = s_now + (itr_in - 2)/(itr_in + 1)*(s_now - s_old)
-        step = min(1/L, 0.9*np.min(s_FISTA)/sub_rho2*K/np.max(lengths))
-        r_FISTA = y - grads@w_FISTA
-        s_sum = np.sum(lengths * s_FISTA)
-        f_FISTA = 0.5 * r_FISTA @ r_FISTA + lambda2 * np.dot(w_FISTA-w_bar, w_FISTA-w_bar) + sub_rho2/K*s_sum  - np.dot(w_FISTA, s_vec)
-        gradf_wFISTA = -grads.T@r_FISTA + 2 * lambda2 * (w_FISTA - w_bar)  - s_vec
-        while True:
-            itr_search += 1
-            
-            w_hat = w_FISTA - gradf_wFISTA * step
-            s_hat = s_FISTA - sub_rho2/K * lengths * step
-            s_hat = np.sort(s_hat)[::-1]
-            what_prox = np.sign(w_hat) * np.maximum(np.abs(w_hat) - step * sub_rho1, 0)
-            w_trial, s_trial, top_K_idx = SM_LinfProj(what_prox, s_hat, K, M, base_len)
-            #print('len s_trial:',len(s_trial),'len s_FISTA:',len(s_FISTA),'len lengths:',len(lengths))
-            """
-            test = np.zeros_like(s_trial)
-            for i in range(M-1):
-                test[i] = s_trial[i+1] - s_trial[i]
-                if test[i] > 0:
-                    print('test si:',s_trial[i],'s_i+1:',s_trial[i+1])
-            """
-            #d = w_trial - w_now
-            r_trial = y - grads @ w_trial
-            s_sum = np.sum(lengths * s_trial)
-            f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar)  + sub_rho2/K * s_sum  - np.dot(w_trial, s_vec)
-            #f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar) + sub_rho1 * np.sum(np.abs(w_trial)) + sub_rho2 * s_trial  - np.dot(w_trial, s_vec)
-
-    
-            if abs(step) <= 1e-8:
-            #if step <= 1e-4 * min(1/L, s_now/sub_rho):
-                step = min(1/L, 0.9*np.min(s_FISTA)/sub_rho2*K/np.max(lengths))
-                w_hat = w_FISTA - gradf_wFISTA * step
-                s_hat = s_FISTA - sub_rho2/K * lengths * step
-                s_hat = np.sort(s_hat)[::-1]
-                what_prox = np.sign(w_hat) * np.maximum(np.abs(w_hat) - step * sub_rho1, 0)
-                w_trial, s_trial, top_K_idx = SM_LinfProj(what_prox, s_hat, K, M, base_len)
-
-                r_trial = y - grads @ w_trial
-                s_sum = np.sum(lengths * s_trial)
-                f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar)  + sub_rho2/K * s_sum  - np.dot(w_trial, s_vec)
-
-                #print('Sub Armijo Failed,f_trial:',f_trial,'itr_in:',itr_in)
-                itr_in += 1
-                break
-     
-
-            if f_trial <= f_FISTA + np.dot(gradf_wFISTA, w_trial - w_FISTA) + np.dot(sub_rho2/K*lengths, s_trial-s_FISTA) + (np.dot(w_trial-w_FISTA,w_trial-w_FISTA) + np.dot(s_trial-s_FISTA, s_trial-s_FISTA))/(2*step):
-                itr_in += 1
-                objs.append(f_trial)
-                break
-            else:
-                step *= 0.5
-
-        #print('itr_in:',itr_in,'f_trial:',f_trial,'s max:',np.max(s_trial),'s min:',np.min(s_trial),'step:',step)
-        #if abs(f_trial-f_old) <= max(epsilon, 1e-5) and np.dot(w_trial-w_old, w_trial-w_old) + np.dot(s_trial-s_old, s_trial-s_old) <= 1e-3:
-        if abs(f_trial-f_old) <= max(epsilon, 1e-4):
-            w_rho = w_trial
-            r_rho = r_trial
-            s_rho = s_trial
-            f_rho = f_trial
-            break
-
-        #gradf_wold = gradf_wnow.copy()
-        f_old = f_trial
-        w_old = w_now.copy()
-        r_old = r_now.copy()
-        s_old = s_now
-        w_now = w_trial.copy()
-        r_now = r_trial.copy()
-        s_now = s_trial
-    return w_rho, s_rho, r_rho, top_K_idx, f_rho, stopFlag
-#M个s值，使用ADMM/PPA求解最优二值化目标值的一步稀疏+量化方法
 def SMSB_OneStep(M, y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99,max_sub=5):
     
     st = time()
     itr_rho = 1
-    ArmijoM = 4
+    
     objs = []
     epsilon = init_tol
     
-    L = 1.05*(skl_svd(grads)**2 + lambda2*2)
-
     ####将起始点从w_bar更换为根据w_bar的前K支集求解的SB解
     base_len = K // M#将长度为K的数组均分成M段，每段应该有base_len个数字
     remainder = K % M#剩下的remainder个全部放进最后一个数组
@@ -975,27 +781,48 @@ def SMSB_OneStep(M, y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-
 
     penaltySparse = L1norm - Knorm
     penaltyBinary = np.sum(lengths * s_rho) - Knorm
+    """
+    #对于MLP,SP=0.3, M=4
+    sub_rho1 = f_original / penaltySparse * rhoStartRatio
+    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio * 1e-2
+    """
+    """
+    #MLP
+    sub_rho1 = f_original / penaltySparse * rhoStartRatio * 1e-2 #MLP,当过稀疏时，*1e-2减小sub_rho1，同时减小sub_rho2
+    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio * 1e-2
+    """
+    """
+    #LeNet SP=0.3,0.4,0.5, M=64, 127
+    sub_rho1 = f_original / penaltySparse * rhoStartRatio * 1e-1
+    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio * 10
+    """
+    """
+    #LeNet SP=0.6,0.7,M=64, 127
+    sub_rho1 = f_original / penaltySparse * rhoStartRatio * 1e-1
+    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio
+    """
+    
+    #Res SP=0.3,0.4,0.5, M=64, 127
+    sub_rho1 = f_original / penaltySparse * rhoStartRatio * 1e-1
+    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio * 10
+    
+    """
+    #Res SP=0.6, 0.7, M=64, 127
     sub_rho1 = f_original / penaltySparse * rhoStartRatio
     sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio
+    """
+    #print('sub_rho1 start:',sub_rho1,'sub_rho2 start:',sub_rho2)
 
-    print('sub_rho1 start:',sub_rho1,'sub_rho2 start:',sub_rho2)
-
-    signSupp = np.sign(w_rho[top_K_idx])
-    signSupp_old = signSupp.copy()
-    f_old = 0
     while True:
         
         w_now = w_rho.copy()
         s_now = s_rho
-        r_now = r_rho.copy()
-        #z_now = V.T(w_now - w_bar)
-        f_new = 0
         epsilon /= itr_rho
         epsilon = max(epsilon, 1e-5)
         itr_sub = 0
         st = time()
         alpha = (sub_rho1 + sub_rho2/K)
-        itr_in = 1
+
         s_vec = np.zeros_like(w_bar)
         while True:
             itr_sub += 1
@@ -1007,59 +834,26 @@ def SMSB_OneStep(M, y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-
             #ADMM求解子问题
             ADMMrho = sub_rho1 / max(np.min(np.abs(w_now[top_K_idx])) * 10, 1e-5)#这个ADMM里的rho的选取确保不会过稀疏
             w_new, s_new = SM_ADMMSubProblem(y, grads, w_now, w_bar, s_now, s_vec, lambda2, ADMMrho, sub_rho1, sub_rho2, K, M, base_len, lengths, tol = 1e-4, epsilon=epsilon, adaptive_rho=True)
-            ADMMtime = time() - st
-            r_new = y - grads@w_new
-            #f_sub = 0.5 * r_new @ r_new + lambda2 * np.dot(w_new-w_bar, w_new-w_bar) + sub_rho1 * np.sum(np.abs(w_new)) + sub_rho2 * s_new  - np.dot(w_new, s_vec)
-            top_K_idx_new = np.argpartition(np.abs(w_new), -K)[-K:]
-            s_sum = np.sum(lengths * s_new)
-            f_new = evaluate_penaltyNewDCA(r_new, w_new, w_bar, lambda2, sub_rho1, sub_rho2, K, s_sum, top_K_idx_new)
 
-            top_K_idx = top_K_idx_new
-            if abs(f_new - f_old) <= max(epsilon, 1e-4) or itr_sub >= max_sub:
-    
-                print('itr_sub:',itr_sub,'ADMM time:',ADMMtime,'F:',f_new,'max s:',np.max(s_new),'min s:',np.min(s_new))
-                f_rho = f_new
+            if  itr_sub >= max_sub:
                 w_rho = w_new.copy()
-                r_rho = r_new.copy()
                 s_rho = s_new.copy()
-                f_old = f_new
                 break
 
-            f_old = f_new
             w_now = w_new
             s_now = s_new
-            r_now = r_new
+
         
         abs_w = np.abs(w_rho)
         top_K_idx = np.argsort(-abs_w)[:K]
-
-        test_w = abs_w[top_K_idx]
-        for i in range(K):
-
-            piece_num = i // base_len + 1
-            idx = top_K_idx[i]
-            if piece_num <= M-1:
-                test_w[i] = -abs_w[idx] + s_rho[piece_num-1]  
-            else:
-                test_w[i] = -abs_w[idx] + s_rho[-1]
-
-        s_count = np.sum(test_w<=1e-6)
-        below_sCount = np.sum(test_w>1e-6)
-        print('s Count:', s_count, 'below s count:', below_sCount)
 
         number_nonzero = np.sum(abs_w > 0)
         L1norm = np.sum(np.abs(w_rho))
         Knorm = np.sum(abs_w[top_K_idx])
 
-        f_original = 0.5 * (y-grads@w_rho) @ (y-grads@w_rho) + lambda2 * (w_rho-w_bar) @ (w_rho-w_bar)
-        print('sub_rho1:',sub_rho1,'sub_rho2:',sub_rho2,'f_original:',f_original,'f_penalty:',f_rho,'Non-Zero:',number_nonzero)
         SparseRes = L1norm - Knorm
         BinaryRes = np.sum(lengths * s_rho) - Knorm
-        #print('Ks - |||w|||_k:',K*s_rho - Knorm,'||w||_1 - |||w|||_k:',L1norm - Knorm)
-        SparseRatio = 1 - (L1norm - Knorm)/Knorm
-        BinaryRatio = 1 - (np.sum(lengths * s_rho) - Knorm)/Knorm
-        print('SparseRes:',SparseRes,'BinaryRes:',BinaryRes,'Sparse Ratio:',SparseRatio,'Binary Ratio:',BinaryRatio)
-        
+
         if SparseRes > 1e-1:
             sub_rho1 *= rho_ratio
         if BinaryRes > 1e-1:
@@ -1089,7 +883,7 @@ def SMSB_OneStep(M, y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-
     return w_rho, s_rho, objs, sol_time, epsilon
 
 #只有一个s值时的SB问题求解
-def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99):
+def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99, max_itr=1):
     
     st = time()
     itr_rho = 1
@@ -1110,12 +904,6 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
     w_rho[top_K_idx] = w_bar[top_K_idx]
     r_rho = y - grads@w_rho
 
-    """
-    s_rho = np.max(np.abs(w_bar))
-    w_rho = np.random.uniform(-s_rho,s_rho,size=len(w_bar))
-    
-    top_K_idx = np.argpartition(np.abs(w_rho), -K)[-K:]
-    """
 
     abs_w = np.abs(w_bar)
     L1norm = np.sum(abs_w)
@@ -1127,27 +915,18 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
     penaltyBinary = K*s_rho - Knorm
     sub_rho1 = f_original / penaltySparse * rhoStartRatio
     sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio
-    print('s_start:',s_rho,'sub_rho1 start:',sub_rho1,'sub_rho2 start:',sub_rho2)
-    
-    #top_K_idx_old = top_K_idx.copy()
-    signSupp = np.sign(w_rho[top_K_idx])
-    signSupp_old = signSupp.copy()
-    f_old = 0
-    mu = 1e-12
     
     while True:
         
         w_now = w_rho.copy()
         s_now = s_rho
-        r_now = r_rho.copy()
-        #z_now = V.T(w_now - w_bar)
-        f_new = 0
+
+
         epsilon /= itr_rho
         epsilon = max(epsilon, 1e-5)
         itr_sub = 0
-        st = time()
+
         alpha = (sub_rho1 + sub_rho2/K)
-        itr_in = 1
         s_vec = np.zeros_like(w_bar)
         while True:
             itr_sub += 1
@@ -1158,57 +937,22 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
             ADMMrho = sub_rho1 / np.min(np.abs(w_now[top_K_idx])) * 10#这个ADMM里的rho的选取确保不会过稀疏
             #ADMM求解子问题
             w_new, s_new = ADMMSubProblem(y, grads, w_now, w_bar, s_now, s_vec, lambda2, ADMMrho, sub_rho1, sub_rho2, tol = 1e-6, epsilon=epsilon, adaptive_rho=True)
-            ADMMtime = time() - st
-            r_new = y - grads@w_new
-            #f_sub = 0.5 * r_new @ r_new + lambda2 * np.dot(w_new-w_bar, w_new-w_bar) + sub_rho1 * np.sum(np.abs(w_new)) + sub_rho2 * s_new  - np.dot(w_new, s_vec)
-            top_K_idx_new = np.argpartition(np.abs(w_new), -K)[-K:]
-            f_new = evaluate_penaltyNewDCA(r_new, w_new, w_bar, lambda2, sub_rho1, sub_rho2, K, K*s_new, top_K_idx_new)
-            print('itr_sub:',itr_sub,'ADMM time:',ADMMtime,'F:',f_new,'s:',s_new)
-            """
-            w_new, s_new, r_new, top_K_idx_new, f_sub, stopFlag = Oldsol_subproblem(y, grads, w_now, w_bar, s_now, r_now, s_vec, L, lambda2, K, sub_rho1, sub_rho2, epsilon)
-        
-            Proxtime = time() - st
-            f_sub = 0.5 * r_new @ r_new + lambda2 * np.dot(w_new-w_bar, w_new-w_bar) + sub_rho1 * np.sum(np.abs(w_new)) + sub_rho2 * s_new  - np.dot(w_new, s_vec)
-            f_new = evaluate_penaltyNewDCA(r_new, w_new, w_bar, lambda2, sub_rho1, sub_rho2, K, K*s_new, top_K_idx_new)
+     
+            if itr_sub >= max_itr:
+                w_rho = w_new.copy()
+                s_rho = s_new
 
-            top_K_idx = top_K_idx_new
-            """
-            #if abs(f_new - f_old) <= 1e-4 and not stopFlag:
-            if abs(f_new - f_old) <= max(epsilon, 1e-5):
-                #print('itr_sub:',itr_sub,'Prox time:',Proxtime,'f_sub:',f_sub,'F:',f_new,'s:',s_new)
-                print('itr_sub:',itr_sub,'ADMM time:',ADMMtime,'f_sub:',f_sub,'F:',f_new,'s:',s_new)
-                f_rho = f_new
-                w_rho = w_new.copy()
-                r_rho = r_new.copy()
-                s_rho = s_new
-                f_old = f_new
                 break
-            
-            if itr_sub >= 1:
-                f_rho = f_new
-                w_rho = w_new.copy()
-                r_rho = r_new.copy()
-                s_rho = s_new
-                f_old = f_new
-                break
-            
-            f_old = f_new
+
             w_now = w_new
             s_now = s_new
-            r_now = r_new
-        
-        abs_w = np.abs(w_rho) 
-        s_Count = np.sum(np.abs((abs_w - s_rho)) <= 1e-6)
-        number_nonzero = np.sum(abs_w > 0)
+
         top_K_idx = np.argpartition(abs_w, -K)[-K:]
         L1norm = np.sum(np.abs(w_rho))
         Knorm = np.sum(abs_w[top_K_idx])
-        f_original = 0.5 * (y-grads@w_rho) @ (y-grads@w_rho) + lambda2 * (w_rho-w_bar) @ (w_rho-w_bar)
-        print('sub_rho1:',sub_rho1,'sub_rho2:',sub_rho2,'f_original:',f_original,'f_penalty:',f_rho,'s_count:',s_Count,'Non-Zero:',number_nonzero)
-        #print('Ks - |||w|||_k:',K*s_rho - Knorm,'||w||_1 - |||w|||_k:',L1norm - Knorm)
+
         SparseRatio = 1 - (L1norm - Knorm)/Knorm
         BinaryRatio = 1 - (K*s_rho - Knorm)/Knorm
-        print('Sparse Ratio:',SparseRatio,'Binary Ratio:',BinaryRatio)
         
         if SparseRatio >= 1 and BinaryRatio > ConvergenceRatio:
             print('Sparse Satisfy') 
@@ -1222,7 +966,7 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
             w_rho = u * s_rho
             abs_w = np.abs(w_rho) 
             s_Count = np.sum(np.abs((abs_w - s_rho)) <= 1e-6)
-            number_nonzero = np.sum(abs_w > 0)
+
             break
         if SparseRatio > ConvergenceRatio and BinaryRatio > ConvergenceRatio:
             print('Constrain Nearly Satisfy') 
@@ -1247,8 +991,6 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
 
         itr_rho += 1
         epsilon = init_tol/itr_rho
-        signSupp_old = signSupp.copy()
-
 
     sol_time = time()-st
 
@@ -1367,7 +1109,7 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
         g_now = -grads.T @ r_now + 2 * lambda2 * (w_now - w_bar)
         g_penaltynow = g_now + sub_rho * penalty_norm
         
-        #g_now = -grads.T @ r_now + 2 * lambda2 * (w_now - w_bar)
+
         rhoFlag = False
         while True:
 
@@ -1391,7 +1133,6 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                 sy = np.dot(sBB, yBB)
                 
                 if sy <= 0 or np.dot(sBB, sBB) == 0:
-                    print('sy:',sy,'sBB*sBB:',np.dot(sBB,sBB))
                     step = 0.1
                 else:
                     if sy <= 0:
@@ -1422,13 +1163,7 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                 f_trial = evaluate_original(r_trial, w_trial, w_bar, lambda2) + sub_rho * (np.sum(np.abs(w_trial)) - Knorm)
                 
                 iter_number += 1
-                """
-                if itr_search >= 30 or step < step_old * 1e-4:
-                    print('Armijo Failed, update rho')
-                    w_trial = w_rho.copy()
-                    rhoFlag = True
-                    break
-                """
+
                 if f_trial <= f_ref + 1e-4 * np.dot(g_penaltynow, d):
                     itr_in += 1
                     objs.append(f_trial)
@@ -1436,8 +1171,7 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                     break
                 else:
                     step *= 0.5
-            #print('itr_in:',itr_in,'f:',f_trial,'nonzero:',np.count_nonzero(w_trial),'step:',step)
-            #if abs(f_trial - f_now) <= min(1e-2, 1e-2*abs(f_now)) :
+
             if np.dot(w_trial-w_now, w_trial-w_now) <= epsilon and abs(f_trial - f_now) <= min(1e-2, 1e-2*abs(f_now)):
                 rhoFlag = True
 
@@ -1472,7 +1206,6 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
         if number_nonzero <= K:
             break
         else:
-            print('rho:',sub_rho,'number non-zero:',number_nonzero,'itr_in:',itr_in)
             sub_rho *= rho_ratio
             iter_rho += 1
             epsilon = init_tol/iter_rho

@@ -1,16 +1,16 @@
 import re
 import time
 from utils.main_utils import *
-
+import sys
 
 class MultiStagePruner:
-    def __init__(self,pruner,test_dataloader,schedule,num_stages):
+    def __init__(self,pruner,test_dataloader,schedule,num_stages,algo='Active_refBBDCA'):
         self.pruner = pruner
         self.test_dataloader = test_dataloader
         self.results = []
         self.schedule=schedule
         self.num_stages=num_stages
-
+        self.algo = algo
     def reset_pruner(self):
         self.results=[]
 
@@ -40,7 +40,10 @@ class MultiStagePruner:
                 self.results[-1]['test_acc'] = compute_acc(self.pruner.model,self.test_dataloader,self.pruner.device)
                 print('Stage k',len(w_pruned.nonzero()[0]),self.results[-1]['test_acc'])
                 if not FILE is None:
+                    PATH = FILE +'.pth'
+                    torch.save(self.pruner.model.state_dict(), PATH)
                     with open(FILE+'_stage'+str(i), "w") as file:
                         json.dump(self.results, file,cls=NpEncoder)
-                
+            if self.algo == 'SMSB':
+                sys.exit()
         return w_pruned,mask

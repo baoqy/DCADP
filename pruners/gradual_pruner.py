@@ -38,6 +38,7 @@ class GradualPruner:
             self.model_without_ddp = self.pruner.pruner.model
         else:
             self.model_without_ddp = self.model
+        #self.M = M
         print('Initial Model has sparsity',(~self.mask.cpu().numpy()).mean(), ' at rank',self.rank)
         
 
@@ -77,7 +78,7 @@ class GradualPruner:
                 else:
                     base_level = base_level_
                 self.model.eval()
-                w_pruned,mask=self.pruner.prune(self.mask,sparsities[epoch_index],base_level)
+                w_pruned,mask=self.pruner.prune(self.mask,sparsities[epoch_index],base_level,FILE=self.filename)
                 self.mask = mask.to(self.device)
                 del mask
                 del w_pruned

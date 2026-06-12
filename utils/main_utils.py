@@ -622,7 +622,7 @@ def model_factory(arch,dset_path,pretrained=True):
         for name, layer in model.named_modules():
             if isinstance(layer, torch.nn.Conv2d) or isinstance(layer, torch.nn.Linear):
                 modules_to_prune.append(name+'.weight')
-        print('Pruning modeules',modules_to_prune)
+        #print('Pruning modeules',modules_to_prune)
         if pretrained:
             
             path = 'checkpoints/ResNet50-Dense.pth'

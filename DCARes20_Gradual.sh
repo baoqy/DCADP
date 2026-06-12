@@ -13,12 +13,8 @@ FIRST_EPOCH=0
 echo $TASK_ID
 echo $EXP_ID
 
-algos=("Active_refBBDCA" "MP")
-block_sizes=(0 -1)
-split_types=(1 -1)
+algos=("Active_refBBDCA" "SMSB")
 algo=${algos[0]}
-block_size=${block_sizes[0]}
-split_type=${split_types[0]}
 
 nums_stages=(1 16 16)
 
@@ -115,7 +111,7 @@ fi
 
 echo $max_lr
 
-seed=2
+seed=1
 
 
 fisher_subsample_sizes=(500)
@@ -125,7 +121,7 @@ l2s=(0.0001 0.001)
 l2=${l2s[0]}
 
 fisher_mini_bszs=(1)
-fisher_mini_bsz=1
+fisher_mini_bsz=16
 
 
 ### change 5-digit MASTER_PORT as you wish, slurm will raise Error if duplicated with others
@@ -141,7 +137,7 @@ python3 -u run_experiment_gradual.py --arch resnet20 --dset cifar10 --num_worker
 --exp_name test --exp_id ${EXP_ID} --test_batch_size 256 --train_batch_size 256 \
 --fisher_subsample_size ${fisher_subsample_size} --fisher_mini_bsz ${fisher_mini_bsz} \
 --num_iterations 1 --num_stages ${num_stages} --seed ${seed} \
---sparsity 0.9 --base_level 0.3 \
+--sparsity 0.7 --base_level 0.3 --dis_num 0 \
 --outer_base_level 0.5  --l2 ${l2} --sparsity_schedule ${sparsity_schedule} \
 --algo ${algo} \
 --max_lr ${max_lr} --min_lr ${min_lr} --prune_every ${prune_every} --nprune_epochs ${nprune_epochs} \

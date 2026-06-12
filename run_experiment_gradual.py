@@ -1,6 +1,6 @@
 import string
 from utils.main_utils import *
-from pruners.CHITA import CHITA
+from pruners.DCADP import DCADP
 from pruners.multi_stage_pruner import MultiStagePruner
 from pruners.gradual_pruner import GradualPruner
 import json
@@ -9,6 +9,7 @@ import argparse
 from itertools import product
 import time
 import os
+print("RUNNING FILE:", os.path.abspath(__file__))
 from torch.utils.data import DataLoader
 import copy
 from utils.lr_schedules import cosine_lr_restarts,mfac_lr_schedule
@@ -17,6 +18,7 @@ import builtins
 import random
 import numpy as np
 import torch
+from collections import OrderedDict
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--arch', type=str, default='mlpnet')
@@ -38,6 +40,7 @@ parser.add_argument('--seed', type=int, nargs='+')
 
 parser.add_argument('--sparsity', type=float, nargs='+')
 parser.add_argument('--base_level', type=float, default=0.1) ##In correspondance with sparsity
+parser.add_argument('--dis_num',type=int, default=0)
 parser.add_argument('--outer_base_level',type=float,default=0.5)
 parser.add_argument('--l2', type=float, nargs='+')
 parser.add_argument('--sparsity_schedule', type=str, nargs='+')
@@ -59,8 +62,8 @@ parser.add_argument('--first_epoch', type=int, default=0)
 parser.add_argument('--schedule', type=str, default='cosine_lr_restarts')
 parser.add_argument('--pretrained', type=lambda x: (str(x).lower() == 'true'), default=True)
 
-parser.add_argument('--local_rank', default=-1, type=int, 
-                        help='local rank for distributed training')
+parser.add_argument('--local_rank', default=-1, type=int, help='local rank for distributed training')
+#parser.add_argument('--local_rank', '--local_rank', default=-1, type=int)
 
 args = parser.parse_args()
 arch = args.arch
@@ -112,8 +115,8 @@ else:
 if 'IMAGENET_PATH' in os.environ:  
     IMAGENET_PATH = os.environ['IMAGENET_PATH']
 else:
-    print('****Warning**** No IMAGENET_PATH variable')
-    IMAGENET_PATH = ''
+    print('Using local imagenet')
+    IMAGENET_PATH = '/share/home/fanxilai_lsec/datasets/image'
 CIFAR10_PATH = '../datasets'
 MNIST_PATH = '../datasets'
 
@@ -126,12 +129,36 @@ model,train_dataset,test_dataset,criterion,modules_to_prune = model_factory(arch
 
 
 ###### Load from checkpoint
+"""
 if len(args.checkpoint_path) >0:
     checkpoint = torch.load(args.checkpoint_path)
+    #checkpoint = torch.load(args.checkpoint_path, map_location=torch.device('cpu'))
     new_state_trained = OrderedDict()
     for k in checkpoint['model_state_dict']:
         new_state_trained[k[7:]] = checkpoint['model_state_dict'][k]
     model.load_state_dict(new_state_trained)
+
+"""
+###### Load from checkpoint
+"""
+if len(args.checkpoint_path) > 0:
+    #checkpoint = torch.load(args.checkpoint_path, map_location=torch.device('cpu'))
+    checkpoint = torch.load(args.checkpoint_path)
+    # 判断 checkpoint 是否包含 'model_state_dict' key
+    if 'model_state_dict' in checkpoint:
+        state_trained = checkpoint['model_state_dict']
+    else:
+        state_trained = checkpoint  # checkpoint 本身就是 state_dict
+
+    new_state_trained = OrderedDict()
+    for k in state_trained:
+        # 去掉可能存在的 'module.' 前缀
+        key = k[7:] if k.startswith('module.') else k
+        new_state_trained[key] = state_trained[k]
+
+    model.load_state_dict(new_state_trained, strict=False)
+"""
+
 
 ####
 if args.distributed:
@@ -212,8 +239,14 @@ for seed,fisher_size, num_stages,num_iterations,sparsity,l2,sparsity_schedule,al
     nepochs = args.nepochs
     nprun_epochs = args.nprune_epochs
     reset_optimizer=True
-    sparsities = generate_schedule(nprun_epochs,args.outer_base_level,sparsity,'poly')
-    #sparsities = [0.3]
+
+    if algo =='Active_refBBDCA':
+        sparsities = generate_schedule(nprun_epochs,args.outer_base_level,sparsity,'poly')
+    else:
+        sparsities = [sparsity]
+    dis_num = args.dis_num
+    print('sparsities:',sparsities)
+    #sparsities = [0.7]
     prun_every = args.prune_every
     gamma_ft = args.gamma_ft
     prunepochs = [(i) *prun_every for i in range(len(sparsities))]
@@ -248,10 +281,10 @@ for seed,fisher_size, num_stages,num_iterations,sparsity,l2,sparsity_schedule,al
     prun_dataloader = DataLoader(train_dataset, batch_size=fisher_mini_bsz, shuffle=False,num_workers=num_workers,pin_memory=True)
     
     model_pruned = model_without_ddp
-    pruner = CHITA(model_pruned,modules_to_prune,prun_dataloader,fisher_subsample_size,fisher_mini_bsz,criterion,l2,num_iterations,
-    device,algo)
+    pruner = DCADP(model_pruned,modules_to_prune,prun_dataloader,fisher_subsample_size,fisher_mini_bsz,criterion,l2,num_iterations,
+    device,algo,dis_num)
 
-    multi_stage_pruner = MultiStagePruner(pruner,test_dataloader,sparsity_schedule,num_stages)
+    multi_stage_pruner = MultiStagePruner(pruner,test_dataloader,sparsity_schedule,num_stages,algo)
     mask = get_pvec(model_without_ddp,modules_to_prune).cpu() != 0
     gradual_pruner = GradualPruner(multi_stage_pruner,train_dataloader,test_dataloader,criterion,
         modules_to_prune,reset_optimizer,momentum,weight_decay,acc_different_methods,FILE,seed,model=model,device=device,mask=mask,

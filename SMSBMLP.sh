@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J DCA_mlp
+#SBATCH -J SMSBMLP
 #SBATCH -p debug
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
@@ -15,12 +15,9 @@ FIRST_EPOCH=0
 echo $TASK_ID
 echo $EXP_ID
 
-algos=("Active_refBBDCA" "MP")
-block_sizes=(0 -1)
-split_types=(1 -1)
-algo=${algos[0]}
-block_size=${block_sizes[0]}
-split_type=${split_types[0]}
+algos=("Active_refBBDCA" "SMSB")
+algo=${algos[1]}
+
 
 nums_stages=(1 16 16)
 
@@ -127,7 +124,7 @@ l2s=(0.0001 0.001)
 l2=${l2s[0]}
 
 fisher_mini_bszs=(1)
-fisher_mini_bsz=1
+fisher_mini_bsz=16
 
 
 ### change 5-digit MASTER_PORT as you wish, slurm will raise Error if duplicated with others
@@ -139,12 +136,12 @@ echo $MASTER_PORT
 #export MASTER_ADDR=$master_addr
 
 
-python3 -u run_experiment_gradual.py --arch mlpnet --dset mnist --num_workers 1 \
+python3 -u /share/home/fanxilai_lsec/SMSB_Final/run_experiment_gradual.py --arch mlpnet --dset mnist --num_workers 1 \
 --exp_name test --exp_id ${EXP_ID} --test_batch_size 256 --train_batch_size 256 \
 --fisher_subsample_size ${fisher_subsample_size} --fisher_mini_bsz ${fisher_mini_bsz} \
 --num_iterations 1 --num_stages ${num_stages} --seed ${seed} \
---sparsity 0.98 --base_level 0.3 \
+--sparsity 0.7 --base_level 0.3 --dis_num 7 \
 --outer_base_level 0.5  --l2 ${l2} --sparsity_schedule ${sparsity_schedule} \
 --algo ${algo} \
 --max_lr ${max_lr} --min_lr ${min_lr} --prune_every ${prune_every} --nprune_epochs ${nprune_epochs} \
---nepochs ${nepochs} --gamma_ft ${gamma_ft} --warm_up ${warm_up} --ft_max_lr ${ft_max_lr} --ft_min_lr ${ft_min_lr}null
+--nepochs ${nepochs} --gamma_ft ${gamma_ft} --warm_up ${warm_up} --ft_max_lr ${ft_max_lr} --ft_min_lr ${ft_min_lr}

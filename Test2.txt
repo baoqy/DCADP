@@ -1,0 +1,90 @@
+node3
+0
+0_0
+0.1
+12073
+RUNNING FILE: /share/home/fanxilai_lsec/SMSB_Final/run_experiment_gradual.py
+Using local imagenet
+Do log softmax:  True
+Using device  cuda
+/share/home/fanxilai_lsec/SMSB_Final/models/mlpnet.py:45: UserWarning: Implicit dimension choice for log_softmax has been deprecated. Change the call to include dim=X as an argument.
+  return F.log_softmax(x)
+Dense test accuracy 93.97  computation time :  3.07841157913208
+seed,fisher_size, num_stages,num_iterations,sparsity,l2,sparsity_schedule,algo 1 (500, 1) 1 1 0.9 0.0001 poly Active_refBBDCA
+sparsities: [0.5, 0.6685185185185185, 0.7814814814814814, 0.85, 0.8851851851851852, 0.8981481481481481, 0.9]
+0.1 1e-05 ----<>
+Initial Model has sparsity 0.0  at rank 0
+Computing gradients 0
+Computing gradients 100
+Computing gradients 200
+Computing gradients 300
+Computing gradients 400
+Grad computation took  1.2827744483947754
+Starting Optimization
+sp: 0.5 k: 16180
+Active_refBBDCA(Only Sparse) Start
+Stage took 10.85645580291748
+/share/home/fanxilai_lsec/SMSB_Final/models/mlpnet.py:45: UserWarning: Implicit dimension choice for log_softmax has been deprecated. Change the call to include dim=X as an argument.
+  return F.log_softmax(x)
+Stage k 16180 93.96
+starting epoch 0 -- lr 0.1  at rank 0
+epoch  0  - time : 8.02945590019226  at rank 0
+epoch  0  - acc : 94.81  - time : 8.02945590019226  at rank 0
+starting epoch 1 -- lr 0.09829646168532197  at rank 0
+epoch  1  - time : 7.990447044372559  at rank 0
+epoch  1  - acc : 95.51  - time : 7.990447044372559  at rank 0
+starting epoch 2 -- lr 0.09330194006220302  at rank 0
+epoch  2  - time : 7.991946697235107  at rank 0
+epoch  2  - acc : 95.84  - time : 7.991946697235107  at rank 0
+starting epoch 3 -- lr 0.08535680352542145  at rank 0
+epoch  3  - time : 7.970125436782837  at rank 0
+epoch  3  - acc : 96.57  - time : 7.970125436782837  at rank 0
+starting epoch 4 -- lr 0.0750025  at rank 0
+epoch  4  - time : 7.997438907623291  at rank 0
+epoch  4  - acc : 96.81  - time : 7.997438907623291  at rank 0
+starting epoch 5 -- lr 0.06294465815990052  at rank 0
+epoch  5  - time : 8.011149406433105  at rank 0
+epoch  5  - acc : 96.63  - time : 8.011149406433105  at rank 0
+starting epoch 6 -- lr 0.05000500000000001  at rank 0
+epoch  6  - time : 7.995394468307495  at rank 0
+epoch  6  - acc : 97.26  - time : 7.995394468307495  at rank 0
+starting epoch 7 -- lr 0.037065341840099485  at rank 0
+epoch  7  - time : 7.9901556968688965  at rank 0
+epoch  7  - acc : 97.22  - time : 7.9901556968688965  at rank 0
+starting epoch 8 -- lr 0.025007500000000012  at rank 0
+epoch  8  - time : 7.997214317321777  at rank 0
+epoch  8  - acc : 97.4  - time : 7.997214317321777  at rank 0
+starting epoch 9 -- lr 0.01465319647457856  at rank 0
+epoch  9  - time : 8.018409967422485  at rank 0
+epoch  9  - acc : 97.49  - time : 8.018409967422485  at rank 0
+starting epoch 10 -- lr 0.006708059937796987  at rank 0
+epoch  10  - time : 7.999958038330078  at rank 0
+epoch  10  - acc : 97.48  - time : 7.999958038330078  at rank 0
+starting epoch 11 -- lr 0.0017135383146780355  at rank 0
+epoch  11  - time : 7.984776496887207  at rank 0
+epoch  11  - acc : 97.48  - time : 7.984776496887207  at rank 0
+Computing gradients 0
+Computing gradients 100
+Computing gradients 200
+Computing gradients 300
+Computing gradients 400
+Grad computation took  1.4360888004302979
+Starting Optimization
+sp: 0.6685185185185185 k: 10726
+Active_refBBDCA(Only Sparse) Start
+Stage took 3.5367472171783447
+Stage k 10726 97.47
+starting epoch 12 -- lr 0.1  at rank 0
+epoch  12  - time : 8.103743553161621  at rank 0
+epoch  12  - acc : 96.67  - time : 8.103743553161621  at rank 0
+starting epoch 13 -- lr 0.09829646168532197  at rank 0
+epoch  13  - time : 8.064833641052246  at rank 0
+epoch  13  - acc : 96.54  - time : 8.064833641052246  at rank 0
+starting epoch 14 -- lr 0.09330194006220302  at rank 0
+epoch  14  - time : 8.117741823196411  at rank 0
+epoch  14  - acc : 96.98  - time : 8.117741823196411  at rank 0
+starting epoch 15 -- lr 0.08535680352542145  at rank 0
+epoch  15  - time : 8.094263792037964  at rank 0
+epoch  15  - acc : 96.26  - time : 8.094263792037964  at rank 0
+starting epoch 16 -- lr 0.0750025  at rank 0
+slurmstepd: error: *** JOB 45091 ON node3 CANCELLED AT 2026-06-12T17:05:39 ***

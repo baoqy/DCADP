@@ -1,11 +1,9 @@
 #!/bin/bash
-#SBATCH -J test
+#SBATCH -J SMSBLeNet
 #SBATCH -p debug
 #SBATCH -N 1
 #SBATCH --gres=gpu:1
- 
 hostname
-
 TASK_ID=0
 EXP_ID="0_0"
 
@@ -15,16 +13,10 @@ FIRST_EPOCH=0
 echo $TASK_ID
 echo $EXP_ID
 
-algos=("Heuristic_LSBlock" "MP")
-block_sizes=(500 -1)
-split_types=(1 -1)
-algo=${algos[0]}
-block_size=${block_sizes[0]}
-split_type=${split_types[0]}
+algos=("Active_refBBDCA" "SMSB")
+algo=${algos[1]}
 
 nums_stages=(1 16 16)
-
-
 
 sparsity_schedule="poly"
 
@@ -120,7 +112,6 @@ fi
 echo $max_lr
 
 seed=2
-
 fisher_subsample_sizes=(500)
 fisher_subsample_size=${fisher_subsample_sizes[0]}
 
@@ -129,6 +120,7 @@ l2=${l2s[0]}
 
 fisher_mini_bszs=(1)
 fisher_mini_bsz=16
+
 
 ### change 5-digit MASTER_PORT as you wish, slurm will raise Error if duplicated with others
 ### change WORLD_SIZE as gpus/node * num_nodes
@@ -139,12 +131,12 @@ echo $MASTER_PORT
 #export MASTER_ADDR=$master_addr
 
 
-python3 -u run_experiment_gradual.py --arch mlpnet --dset mnist --num_workers 2 \
+python3 -u run_experiment_gradual.py --arch LeNet5_80k --dset cifar10 --num_workers 2 \
 --exp_name test --exp_id ${EXP_ID} --test_batch_size 256 --train_batch_size 256 \
 --fisher_subsample_size ${fisher_subsample_size} --fisher_mini_bsz ${fisher_mini_bsz} \
 --num_iterations 1 --num_stages ${num_stages} --seed ${seed} \
---first_order_term False --sparsity 0.98 --base_level 0.3 \
+--sparsity 0.7 --base_level 0.3 --dis_num 7 \
 --outer_base_level 0.5  --l2 ${l2} --sparsity_schedule ${sparsity_schedule} \
---algo ${algo} --block_size ${block_size} \
+--algo ${algo} \
 --max_lr ${max_lr} --min_lr ${min_lr} --prune_every ${prune_every} --nprune_epochs ${nprune_epochs} \
 --nepochs ${nepochs} --gamma_ft ${gamma_ft} --warm_up ${warm_up} --ft_max_lr ${ft_max_lr} --ft_min_lr ${ft_min_lr}
