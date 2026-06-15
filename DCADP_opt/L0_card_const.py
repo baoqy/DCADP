@@ -1091,15 +1091,15 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
 
     w_now = w_bar.copy()
     r_now = y - grads@w_now
-    w_rho = w_bar.copy()
+    #w_rho = w_bar.copy()
     sub_rho = rho_start
     objs = []
     L = ArmijoM
     epsilon = init_tol
     f_now = np.inf
-    step_old = 0
+    #step_old = 0
     while True:
-        w_rho = w_now.copy()
+        #w_rho = w_now.copy()
         l = 0
         itr_in = 0
         
@@ -1114,7 +1114,7 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
         while True:
 
             if itr_in != 0:
-                M = min(iter_number, ArmijoM)
+                M = min(itr_in, ArmijoM)
                 f_ref = np.max(objs[-M:])
                 
             if itr_in == 0:
@@ -1138,15 +1138,15 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                     if sy <= 0:
                         print('sy:',sy)
                         step = 0.1
-                    elif iter_number % 2 == 0:
+                    elif itr_in % 2 == 0:
                         step = sy /np.dot(yBB, yBB)
                     else:
                         step = np.dot(sBB,sBB)/sy
                 #step = max(1e-3, step)
 
-            itr_search = 0
+            #itr_search = 0
             while True:
-                itr_search += 1
+                #itr_search += 1
                 w_trial = DCA_update(w_now, r_now, w_bar, sub_rho, grads, step, lambda2, K)
                 if iter_number == 0:
                     w_temp = np.zeros_like(w_trial)
@@ -1167,7 +1167,7 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                 if f_trial <= f_ref + 1e-4 * np.dot(g_penaltynow, d):
                     itr_in += 1
                     objs.append(f_trial)
-                    step_old = step
+                    #step_old = step
                     break
                 else:
                     step *= 0.5
@@ -1193,7 +1193,7 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                     
             f_now = f_trial
             w_old = w_now
-            r_old = r_now
+            #r_old = r_now
 
             w_now = w_trial
             r_now = r_trial
