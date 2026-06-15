@@ -1138,7 +1138,7 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                     if sy <= 0:
                         print('sy:',sy)
                         step = 0.1
-                    elif itr_in % 2 == 0:
+                    elif iter_number % 2 == 0:
                         step = sy /np.dot(yBB, yBB)
                     else:
                         step = np.dot(sBB,sBB)/sy
