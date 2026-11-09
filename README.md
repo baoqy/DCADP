@@ -1,4 +1,4 @@
-# DCADP
+# Fast as CHITA: Neural Network Pruning with Combinatorial Optimization
 
 This is the offical repo of the  paper **DCADP**
 
@@ -19,7 +19,7 @@ We provide checkpoints for our best pruned models, obtained with the gradual pru
 |Sparsity|Checkpoint|
 |--------|----------|
 
-
+###
 
 ## Structure of the repo
 Scripts to run the algorithms are located in `scripts/`. The current code supports the following architectures (datasets): MLPNet (MNIST), ResNet20 (Cifar10), MobileNetV1 (Imagenet) and ResNet50 (Imagenet). Adding new models can be done through `model_factory` function in `utils/main_utils.py`. 

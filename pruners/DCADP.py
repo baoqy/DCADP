@@ -6,10 +6,10 @@ from contextlib import nullcontext
 from torch.utils.data import DataLoader
 
 from DCADP_opt.L0_card_const import Active_refBBDCA_PP
-from DCADP_opt.L0_card_const import SMSB_OneStep
+from DCADP_opt.L0_card_const import SMSB
 from DCADP_opt.L0_card_const import OneS_SB
 from DCADP_opt.L0_card_const import TriSB
-
+from DCADP_opt.L0_card_const import ref_BBDCA
 import matplotlib.pyplot as plt
 import scipy.sparse.linalg
 from scipy.sparse.linalg import eigsh
@@ -19,7 +19,7 @@ import math
 import seaborn as sns
 class DCADP:
 
-    def __init__(self,model,params,prun_dataloader,ngrads,fisher_mini_bsz,criterion,lambda2,num_iterations,device,algo='SMSB',dis_num=0):
+    def __init__(self,model,params,prun_dataloader,ngrads,fisher_mini_bsz,criterion,lambda2,num_iterations,device,algo='SMSB',dis_num=0,arch=None):
         self.model = model
         self.params = params 
         self.prun_dataloader = prun_dataloader
@@ -35,7 +35,7 @@ class DCADP:
         self.grads = None
         self.results = dict()
         self.dis_num = dis_num
-
+        self.arch = arch
     def update_model(self,new_w):
         set_pvec(new_w, self.model,self.params,self.device)
 
@@ -46,9 +46,40 @@ class DCADP:
     def reset_pruner(self):
         self.results = dict()
         self.grads=None
-        
+
+    def build_all_channels(self, model, params):
+        state = model.state_dict()
+
+        all_channels = []   # 每个元素 = 一个channel对应的w1索引
+        offset = 0
+
+        for name in params:
+            W = state[name]
+
+            if W.ndim == 4:
+                # Conv: (out_c, in_c, kH, kW)
+                out_c, in_c, kh, kw = W.shape
+                c_size = in_c * kh * kw
+
+                for c in range(out_c):
+                    idx = np.arange(offset + c*c_size,
+                                offset + (c+1)*c_size)
+                    all_channels.append(idx)
+
+            elif W.ndim == 2:
+                # FC: (out, in)
+                out_f, in_f = W.shape
+
+                for c in range(out_f):
+                    idx = np.arange(offset + c*in_f,
+                                    offset + (c+1)*in_f)
+                    all_channels.append(idx)
+
+            offset += W.numel()
+
+        return all_channels
  
-    def prune(self,mask,sparsity,grads=None):
+    def prune(self,mask,sparsity,grads=None,arch=None):
         original_weight = get_pvec(self.model, self.params)
         if mask is None:
             mask = torch.ones_like(original_weight).cpu() != 0
@@ -58,6 +89,8 @@ class DCADP:
         Total_number = original_weight.numel()
         zero_grads(self.model)
         self.model.eval()
+        if arch is None:
+            arch = self.arch
 
         if grads is None and self.grads is None:
             ##Deactive syncing if runnining distribitued DP so that the other processes dont wait
@@ -75,7 +108,7 @@ class DCADP:
                     loss.backward()
                     grads[i] = get_gvec(self.model, self.params).to('cpu').double()
                     zero_grads(self.model)
-                    #print('i:',i,'ngrads:',self.ngrads)
+
                     if (i + 1) % self.ngrads == 0:
                         break
                 
@@ -89,7 +122,7 @@ class DCADP:
         y=grads@w1
         
         """
-        #小规模数据生成
+        #random tiny model
 
         n = 100
         np.random.seed(42)
@@ -103,17 +136,37 @@ class DCADP:
 
         print('Starting Optimization')
         start_algo = time.time()
-        print('sp:',sparsity,'k:',k)
+        all_channels = self.build_all_channels(self.model, self.params)
+        num_channels = len(all_channels)
+        print('sp:',sparsity,'k:',k,'channels count:',num_channels)
         if self.algo == 'SMSB':
 
             print('sp:',sparsity,'k:',k,'dis num:',self.dis_num)
             print('OneStep S-Sparse-Binary Start')
-
+   
             if self.dis_num == 1:
-                w_pruned, s, obj, sol_time, epsilon = OneS_SB(y, grads, w1, self.lambda2, k, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99)
+                w_pruned, s, obj, sol_time, epsilon = OneS_SB(arch, y, grads, w1, self.lambda2, k, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99)
             else:
-                w_pruned, s, obj,  BBL1K2sol_time, epsilon = SMSB_OneStep(self.dis_num, y, grads, w1, self.lambda2, k, init_tol=1e-3,  rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99, max_sub=1)
+                w_pruned_sm, s, obj,  BBL1K2sol_time, epsilon = SMSB(arch, self.dis_num, y, grads, w1, self.lambda2, k, init_tol=1e-3,  rho_ratio=2, SparseRhoRatio=1e-2, BinaryRhoRatio=1e-1, ConvergenceRatio=0.99, max_sub=1)
+            r_sm = y - grads@w_pruned_sm
+            f_ori_sm = 0.5*r_sm@r_sm + self.lambda2 * np.dot(w_pruned_sm-w1,w_pruned_sm-w1)
+            """
+            #gloabl quantization
+            val = np.max(np.abs(w_pruned_sm))/7
+            w_pruned = np.round(w_pruned_sm/val)*val
+            #w_pruned = w_pruned_sm.copy()
+            """
+            #per-channel quantization
+            w_pruned = np.zeros_like(w1)
+            for i in range(num_channels):
+                channel = all_channels[i]
+                val = np.max(np.abs(w_pruned_sm[channel]))/31
+                if val > 0:
+                    w_pruned[channel] = np.round(w_pruned_sm[channel]/val) * val
             
+            r_quan = y - grads@w_pruned
+            f_ori_quan = 0.5*r_quan@r_quan + self.lambda2 * np.dot(w_pruned-w1, w_pruned-w1)
+            print('f_ori_sm:',f_ori_sm,'f_ori_quan:',f_ori_quan,'||w_quan-w_sm||_:',np.sum(np.abs(w_pruned-w_pruned_sm)),'val:',val)
         elif self.algo == 'TriSB':
 
             print('OneStep Tri-Sparse-Binary Start')
@@ -122,8 +175,16 @@ class DCADP:
         elif self.algo == 'Active_refBBDCA':
 
             print('Active_refBBDCA(Only Sparse) Start')
-            w_pruned, obj, r, DCAtotal_iter, DCAtot_time, epsilon = Active_refBBDCA_PP(y, grads, self.lambda2, w1, k, rho_delta=1e-2, init_tol = 1e-3, rho_start=1e-2, rho_ratio=2, init_step=1e-1, ArmijoM=10, act_max_itr=10, sea_max_itr=10, kmip=1.5)
-
+            #w_pruned, obj, r, DCAtotal_iter, DCAtot_time, epsilon = Active_refBBDCA_PP(y, grads, self.lambda2, w1, k, rho_delta=1e-2, init_tol = 1e-3, rho_start=1e-2, rho_ratio=2, init_step=1e-1, ArmijoM=10, act_max_itr=10, sea_max_itr=10, kmip=1.5)
+            w_pruned, r_trial, iter_number, sol_time, sub_rho, epsilon = ref_BBDCA(y, grads, self.lambda2, w1,  k, rho_delta=1e-2, init_tol = 1e-3, rho_start=1e-2, rho_ratio=2, init_step=1, ArmijoM=10)
+            
+            r = y - grads@w_pruned
+            f_ori = 0.5*r@r + self.lambda2 * np.dot(w_pruned-w1,w_pruned-w1)
+            obj = f_ori
+            #val = np.max(np.abs(w_pruned))/127
+            #w_pruned = np.round(w_pruned/val)*val
+            
+            print('f_original:',f_ori,'Time:',time.time()-start_algo)
             
         end_algo = time.time()
 

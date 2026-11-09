@@ -9,7 +9,6 @@ import argparse
 from itertools import product
 import time
 import os
-print("RUNNING FILE:", os.path.abspath(__file__))
 from torch.utils.data import DataLoader
 import copy
 from utils.lr_schedules import cosine_lr_restarts,mfac_lr_schedule
@@ -62,8 +61,9 @@ parser.add_argument('--first_epoch', type=int, default=0)
 parser.add_argument('--schedule', type=str, default='cosine_lr_restarts')
 parser.add_argument('--pretrained', type=lambda x: (str(x).lower() == 'true'), default=True)
 
-parser.add_argument('--local_rank', default=-1, type=int, help='local rank for distributed training')
+#parser.add_argument('--local_rank', default=-1, type=int, help='local rank for distributed training')
 #parser.add_argument('--local_rank', '--local_rank', default=-1, type=int)
+
 
 args = parser.parse_args()
 arch = args.arch
@@ -100,6 +100,7 @@ else:
     args.world_size = 1
 args.distributed = args.world_size > 1
 
+"""
 if args.distributed:
     if 'SLURM_PROCID' in os.environ: # for slurm scheduler
         args.rank = int(os.environ['SLURM_PROCID'])
@@ -110,6 +111,18 @@ if args.distributed:
 else:
     args.rank = 0
     args.gpu=0
+"""
+#去掉了local_rank参数，修改分布式判断
+if args.distributed:
+    if 'SLURM_PROCID' in os.environ:
+        args.rank = int(os.environ['SLURM_PROCID'])
+        args.gpu = args.rank % torch.cuda.device_count()
+    else:
+        args.rank = int(os.environ.get("LOCAL_RANK", 0))
+        args.gpu = int(os.environ.get("LOCAL_RANK", 0))
+else:
+    args.rank = 0
+    args.gpu = 0
 
 ##Change this to path of imagenet dset
 if 'IMAGENET_PATH' in os.environ:  
@@ -126,38 +139,6 @@ dset_paths = {'imagenet':IMAGENET_PATH,'cifar10':CIFAR10_PATH,
 dset_path = dset_paths[dset]
 
 model,train_dataset,test_dataset,criterion,modules_to_prune = model_factory(arch,dset_path,pretrained=pretrained)
-
-
-###### Load from checkpoint
-"""
-if len(args.checkpoint_path) >0:
-    checkpoint = torch.load(args.checkpoint_path)
-    #checkpoint = torch.load(args.checkpoint_path, map_location=torch.device('cpu'))
-    new_state_trained = OrderedDict()
-    for k in checkpoint['model_state_dict']:
-        new_state_trained[k[7:]] = checkpoint['model_state_dict'][k]
-    model.load_state_dict(new_state_trained)
-
-"""
-###### Load from checkpoint
-"""
-if len(args.checkpoint_path) > 0:
-    #checkpoint = torch.load(args.checkpoint_path, map_location=torch.device('cpu'))
-    checkpoint = torch.load(args.checkpoint_path)
-    # 判断 checkpoint 是否包含 'model_state_dict' key
-    if 'model_state_dict' in checkpoint:
-        state_trained = checkpoint['model_state_dict']
-    else:
-        state_trained = checkpoint  # checkpoint 本身就是 state_dict
-
-    new_state_trained = OrderedDict()
-    for k in state_trained:
-        # 去掉可能存在的 'module.' 前缀
-        key = k[7:] if k.startswith('module.') else k
-        new_state_trained[key] = state_trained[k]
-
-    model.load_state_dict(new_state_trained, strict=False)
-"""
 
 
 ####
@@ -193,6 +174,7 @@ if args.distributed:
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
 else:
     train_sampler = None
+
 train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size, shuffle=(train_sampler is None),num_workers=num_workers,pin_memory=True,sampler=train_sampler)
 test_dataloader = DataLoader(test_dataset, batch_size=args.test_batch_size, shuffle=True,num_workers=num_workers,pin_memory=True)
 
@@ -245,8 +227,8 @@ for seed,fisher_size, num_stages,num_iterations,sparsity,l2,sparsity_schedule,al
     else:
         sparsities = [sparsity]
     dis_num = args.dis_num
-    print('sparsities:',sparsities)
-    #sparsities = [0.7]
+    print('sparsities:',sparsities,'arch:',arch)
+
     prun_every = args.prune_every
     gamma_ft = args.gamma_ft
     prunepochs = [(i) *prun_every for i in range(len(sparsities))]
@@ -279,18 +261,18 @@ for seed,fisher_size, num_stages,num_iterations,sparsity,l2,sparsity_schedule,al
     'test_batch_size':args.test_batch_size})
 
     prun_dataloader = DataLoader(train_dataset, batch_size=fisher_mini_bsz, shuffle=False,num_workers=num_workers,pin_memory=True)
-    
+
     model_pruned = model_without_ddp
     pruner = DCADP(model_pruned,modules_to_prune,prun_dataloader,fisher_subsample_size,fisher_mini_bsz,criterion,l2,num_iterations,
-    device,algo,dis_num)
+    device,algo,dis_num, arch)
 
-    multi_stage_pruner = MultiStagePruner(pruner,test_dataloader,sparsity_schedule,num_stages,algo)
+    multi_stage_pruner = MultiStagePruner(pruner,test_dataloader,sparsity_schedule,num_stages,algo,arch)
     mask = get_pvec(model_without_ddp,modules_to_prune).cpu() != 0
     gradual_pruner = GradualPruner(multi_stage_pruner,train_dataloader,test_dataloader,criterion,
         modules_to_prune,reset_optimizer,momentum,weight_decay,acc_different_methods,FILE,seed,model=model,device=device,mask=mask,
-        first_epoch=args.first_epoch,distributed=args.distributed,rank=args.rank,world_size=args.world_size)
+        first_epoch=args.first_epoch,distributed=args.distributed,rank=args.rank,world_size=args.world_size, arch=arch)
 
-    gradual_pruner.prune(nepochs,lr_schedule,prunepochs,sparsities)
+    gradual_pruner.prune(nepochs,lr_schedule,prunepochs,sparsities, arch)
 
     with open(FILE, "w") as file:
         json.dump(acc_different_methods, file,cls=NpEncoder)

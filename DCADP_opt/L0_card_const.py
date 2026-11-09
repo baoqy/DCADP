@@ -108,15 +108,14 @@ def initial_active_set(y,X,beta,r,k,alpha,lambda1,lambda2,beta_tilde1,beta_tilde
     return active_set
 
 
-#原问题的目标函数值
+#original objuec function
 @nb.njit(cache=True)
 def evaluate_original(r, w_t, w_bar, lambda2):
-    #print('r*r:',r@r,'lambda2*||w-w_bar||^2:',lambda2*((w_t - w_bar)@(w_t - w_bar)))
-    
-    return 0.5*r@r + lambda2*((w_t - w_bar)@(w_t - w_bar))
-    #return 0.5*np.sum(r**2) + lambda2*np.sum(w_sub2**2) 
 
-#新DCA方法的子问题目标函数
+    return 0.5*r@r + lambda2*((w_t - w_bar)@(w_t - w_bar))
+
+
+#penalty object function
 @nb.njit(cache=True)
 def evaluate_penaltyNewDCA(r, w_t, w_bar, lambda2, rho1, rho2, K, s_sum, top_K_idx):
     w_sub = w_t - w_bar
@@ -126,7 +125,7 @@ def evaluate_penaltyNewDCA(r, w_t, w_bar, lambda2, rho1, rho2, K, s_sum, top_K_i
     #print('f_original:',0.5*np.dot(r,r) + lambda2*np.dot(w_sub,w_sub),'rho1*:',rho1 * (L1norm - Knorm),'rho2/K*:',rho2/K * (K*scalar - Knorm))
     return 0.5*np.dot(r,r) + lambda2*np.dot(w_sub,w_sub) + rho1 * (L1norm - Knorm) + rho2/K * (s_sum - Knorm)
 
-#ADMM求解子问题过程的v,s的更新
+#update v, s in ADMM
 @nb.njit(cache=True)
 def prox_l1_linf(z, rho1, rho2, rho):
     """
@@ -173,56 +172,46 @@ def prox_l1_linf(z, rho1, rho2, rho):
     v = np.sign(z) * np.minimum(u, t)
     return v, t
 
-#ADMM求解子问题中分段约束的v,s更新
+
 @nb.njit(cache=True)
-def SM_proj_l1_linf(z, v, K, M, base_len, sub_rho1, sub_rho2, rho, lengths):
-    #分段以v的排序进行，取出对应的z
-    #v_abs = np.abs(v)
+def SM_proj_l1_linf(z, K, M, lengths,sub_rho1, sub_rho2, rho, offsets):
+
+
     z_abs = np.abs(z)
-    top_all_idx = np.argsort(-z_abs)
-    top_K_idx = top_all_idx[:K]
-    sort_z_abs = z_abs[top_all_idx]#这里sort_what_abs里是绝对值且从大到小
-    
-    # 用 numba.typed.List 替代普通 list
-    Pieces = List()
-    
-    #前面的M-1段都在前K个里，每段长度为base_len
-    start = 0
-    if M > 1:
-        for i in range(M-1):
-            end = start + base_len
-            Pieces.append(sort_z_abs[start:end])#每个Piece里都是绝对值，从大到小
-            start = end
-    
-        #进行投影时为了保序，将其余 K - (M-1)*base_len + n-K个全部放入最后一段
-        Pieces.append(sort_z_abs[(M-1)*base_len:])
-    else:
-        Pieces.append(sort_z_abs)
 
-    # 预分配 w 数组
-    z_new = np.zeros_like(z)
-    s_arr = np.zeros(M)
-    
-    ptr = 0
+    top_K_idx = np.argpartition(-z_abs, K-1)[:K]
+
+    top_K_idx = top_K_idx[np.argsort(-z_abs[top_K_idx])]
+
+    z_new=np.zeros_like(z)
+    s_arr=np.zeros(M)
+
     for i in range(M):
-        z_piece = Pieces[i]#每个Piece里都是绝对值，从大到小
-        #shat_element = shat[i]
-        #zProj, sProj, _ = sLinf_Proj(z_piece, shat_element, len(z_piece))#每个sProj里都是绝对值，从大到小
-        if i < M-1:
-            block_size = base_len
-        else:
-            block_size = lengths[-1]
-        zProj, sProj = prox_l1_linf(z_piece, sub_rho1, sub_rho2/K * block_size, rho)
-        s_arr[i] = sProj
-        for j in range(len(zProj)):
-            idx = top_all_idx[ptr]#对应在what中的索引为idx
-            z_new[idx] = np.sign(z[idx]) * zProj[j]
-            ptr += 1
-    
-    return z_new, s_arr
 
-#ADMMD里w更新
-def solve_w_subproblem(X, w_bar, s_vec, u, v, lambda2, rho, w_init=None, tol=1e-8, maxiter=50):
+        start=offsets[i]
+        end=offsets[i+1]
+
+        idx_block=top_K_idx[start:end]
+
+        z_piece=z_abs[idx_block]
+
+        zProj,sProj=prox_l1_linf(
+            z_piece,
+            sub_rho1,
+            sub_rho2/K*lengths[i],
+            rho
+        )
+
+        s_arr[i]=sProj
+
+        for j in range(end-start):
+            idx=idx_block[j]
+            z_new[idx]=np.sign(z[idx])*zProj[j]
+
+    return z_new,s_arr,top_K_idx
+
+#update w in ADMM
+def solve_w_subproblem(b_part, X, w_bar, s_vec, u, v, lambda2, rho, w_init=None, tol=1e-8, maxiter=50):
     """
     Solve:
         (X^T X + lambda2 I)(w - w_bar) - s_vec + rho (w + u - v) = 0
@@ -267,13 +256,15 @@ def solve_w_subproblem(X, w_bar, s_vec, u, v, lambda2, rho, w_init=None, tol=1e-
     )
 
     # Right-hand side
+    b = b_part  - rho * (u-v)
+    """
     b = (
         X.T @ (X @ w_bar)
         + 2*lambda2 * w_bar
         + s_vec
         - rho * (u - v)
     )
-
+    """
     # Conjugate Gradient solve
     w, info = cg(
         A,
@@ -290,7 +281,7 @@ def solve_w_subproblem(X, w_bar, s_vec, u, v, lambda2, rho, w_init=None, tol=1e-
     #print('CG res:',res)
     return w
 
-#三值问题，ADMM求解子问题时v的更新
+#update v, subproblem of s=1, w = -1, 0, 1, ADMM
 def shrink_clip(w, u, rho1, rho):
     """
     Solve:
@@ -320,10 +311,9 @@ def shrink_clip(w, u, rho1, rho):
 
     return v
 
-#三值问题，取定s=1的取值时，ADMM求解子问题
+#subproblem of s = 1, w = -1, 0, 1, ADMM
 def TriProblem_ADMMSubProblem(y, grads,  w_start, w_bar,  s_vec, lambda2,  ADMMrho, sub_rho1, sub_rho2, K,  tol = 1e-4, epsilon=1e-4, adaptive_rho=True):
     w = w_start.copy()
-    #v = np.zeros_like(w)
     v = w_start.copy()
     u = np.zeros_like(w)
     rho = ADMMrho#这个rho的选取确保不会过稀疏
@@ -360,78 +350,7 @@ def TriProblem_ADMMSubProblem(y, grads,  w_start, w_bar,  s_vec, lambda2,  ADMMr
 
     return v
 
-#三值问题给定s=1, PPA-FISTA求解Sparse-Binary-新DCA问题的子问题
-def PPAsol_subproblem(y, grads, w_start, w_bar,  r_start, s_vec, L, lambda2, K, sub_rho1, sub_rho2, epsilon):
-    w_now = w_start.copy()
-    w_old = w_start.copy()
-
-    w_rho = w_start.copy()
-
-    r_rho = r_start.copy()
-    f_rho = 0
-    r_now = r_start.copy()
-
-    objs = []
-    step_BB = 0 
-    step_old = 0
-    f_old = 0.5*r_now@r_now + lambda2*np.dot(w_now-w_bar,w_now-w_bar)  - np.dot(w_now, s_vec)
-    f_trial = 0
-    itr_in = 1
-    c = 1e-4
-
-    while True:
-
-        step = 1/L
-        itr_search = 0
-        w_FISTA = w_now + (itr_in - 2)/(itr_in + 1)*(w_now - w_old)
-        r_FISTA = y - grads@w_FISTA
-        f_FISTA = 0.5 * r_FISTA @ r_FISTA + lambda2 * np.dot(w_FISTA-w_bar, w_FISTA-w_bar)  - np.dot(w_FISTA, s_vec)
-        gradf_wFISTA = -grads.T@r_FISTA + 2 * lambda2 * (w_FISTA - w_bar)  - s_vec
-        while True:
-            itr_search += 1
-            
-            w_hat = w_FISTA - gradf_wFISTA * step
-            what_prox = np.sign(w_hat) * np.maximum(np.abs(w_hat) - step * sub_rho1, 0)
-            #w_trial, s_trial, top_K_idx = sLinf_Proj(what_prox, s_hat, K)
-            #d = w_trial - w_now
-            w_trial = np.clip(what_prox, -1, 1)
-            r_trial = y - grads @ w_trial
-            f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar)  - np.dot(w_trial, s_vec)
-            #f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar) + sub_rho1 * np.sum(np.abs(w_trial)) + sub_rho2 * s_trial  - np.dot(w_trial, s_vec)
-
-            if abs(step) <= 1e-8:
-            #if step <= 1e-4 * min(1/L, s_now/sub_rho):
-                step = 1/L
-                w_hat = w_FISTA - gradf_wFISTA * step
-                what_prox = np.sign(w_hat) * np.maximum(np.abs(w_hat) - step * sub_rho1, 0)
-                w_trial = np.clip(what_prox,-1,1)
-                r_trial = y - grads @ w_trial
-                f_trial = 0.5 * r_trial @ r_trial + lambda2 * np.dot(w_trial-w_bar, w_trial-w_bar) + sub_rho1 * np.sum(np.abs(w_trial))  - np.dot(w_trial, s_vec)
-                print('Sub Armijo Failed,f_trial:',f_trial)
-                break
-
-            if f_trial <= f_FISTA + np.dot(gradf_wFISTA, w_trial - w_FISTA) + (np.dot(w_trial-w_FISTA,w_trial-w_FISTA))/(2*step):
-                itr_in += 1
-                objs.append(f_trial)
-                break
-            else:
-                step *= 0.5
-
-        if abs(f_trial-f_old) <= max(epsilon, 1e-5):
-        #if abs(f_trial-f_old) <= 1e-4:
-            w_rho = w_trial
-            r_rho = r_trial
-            f_rho = f_trial
-            break
-        
-        f_old = f_trial
-        w_old = w_now.copy()
-        r_old = r_now.copy()
-        w_now = w_trial.copy()
-        r_now = r_trial.copy()
-
-    return w_rho, r_rho,  f_rho
-#三值问题，使用ADMM求解最优二值化目标值的一步稀疏+量化方法
+#given S = 1, w = -1, 0, 1
 def TriSB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99,max_sub=50):
     
     st = time()
@@ -496,18 +415,13 @@ def TriSB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_ratio=2, rhoStartRatio
             grad_K2norm = np.zeros_like(w_now)
             grad_K2norm[top_K_idx] = np.sign(w_now[top_K_idx])
             s_vec =  alpha * grad_K2norm 
-            """
-            grad_Squarenorm = np.zeros_like(w_now)
-            grad_Squarenorm[top_K_idx] = 2*w_now[top_K_idx]
-            s_vec = sub_rho1 * grad_K2norm + sub_rho2/K * grad_Squarenorm
-            """
+
             #ADMM求解子问题
             #ADMMrho = sub_rho1 / max(np.min(np.abs(w_now[top_K_idx])) * 10, 1e-5)#这个ADMM里的rho的选取确保不会过稀疏
             #w_new, s_new = SM_ADMMSubProblem(y, grads, w_now, w_bar, s_now, s_vec, lambda2, ADMMrho, sub_rho1, sub_rho2, K, M, base_len, lengths, tol = 1e-4, epsilon=epsilon, adaptive_rho=True)
             ADMMrho = 1e-1
             w_new = TriProblem_ADMMSubProblem(y, grads,  w_now, w_bar, s_vec, lambda2,  ADMMrho, sub_rho1, sub_rho2, K, tol = 1e-4, epsilon=1e-4, adaptive_rho=True)
             
-            #w_new, r_new, _ = PPAsol_subproblem(y, grads, w_now, w_bar,  r_now, s_vec, L, lambda2, K, sub_rho1, sub_rho2, epsilon)
             top_K_idx_new = np.argpartition(np.abs(w_new), -K)[-K:]
             ADMMtime = time() - st
             r_new = y - grads@w_new
@@ -538,7 +452,7 @@ def TriSB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_ratio=2, rhoStartRatio
         number_nonzero = np.sum(abs_w > 0)
         L1norm = np.sum(np.abs(w_rho))
         Knorm = np.sum(abs_w[top_K_idx])
-        #print('Knorm:',Knorm)
+
         f_original = 0.5 * (y-grads@w_rho) @ (y-grads@w_rho) + lambda2 * (w_rho-w_bar) @ (w_rho-w_bar)
         print('sub_rho1:',sub_rho1,'sub_rho2/K:',sub_rho2/K,'f_original:',f_original,'f_penalty:',f_rho,'Non-Zero:',number_nonzero)
         SparseRes = L1norm - Knorm
@@ -563,25 +477,6 @@ def TriSB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_ratio=2, rhoStartRatio
             w_rho = w_new
             break
     
-        """
-        if SparseRes <= 1 and Notrho2Flag:
-            sub_rho2 = 100
-            Notrho2Flag = False
-        """
-        """
-        if SparseRatio < 0.97:
-            sub_rho1 *= rho_ratio
-        if BinaryRatio < 0.97:
-            sub_rho2 *= rho_ratio
-        if SparseRatio >= 0.97 and BinaryRatio >= 0.97:
-            print('Cons Res Satisfy')
-            w_new = np.zeros_like(w_bar)
-            for i in range(K):
-                idx = top_K_idx[i]
-                w_new[idx] = np.sign(w_rho[idx])
-            w_rho = w_new
-            break
-        """
         itr_rho += 1
         epsilon = init_tol/itr_rho
 
@@ -589,49 +484,91 @@ def TriSB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_ratio=2, rhoStartRatio
 
     return w_rho,  objs, sol_time, epsilon
 
-#M个s的取值时，ADMM求解子问题
-def SM_ADMMSubProblem(y, grads,  w_start, w_bar, s_start, s_vec, lambda2,  ADMMrho, sub_rho1, sub_rho2, K, M, base_len, lengths, tol = 1e-4, epsilon=1e-4, adaptive_rho=True):
+#subproblem of SMSB, ADMM
+def SM_ADMMSubProblem(arch, offsets, b_part1, max_sub, top_K_idx, y, grads,  w_start, v_start, w_bar, s_start, lambda2,  ADMMrho, sub_rho1, sub_rho2, K, M, base_len, lengths, tol = 1e-4, epsilon=1e-4, adaptive_rho=True):
+
     w = w_start.copy()
-    #v = np.zeros_like(w)
-    v = w_start.copy()
+    v = v_start.copy()
+
     u = np.zeros_like(w)
-    s = s_start
-    rho = ADMMrho#这个rho的选取确保不会过稀疏
+    s = s_start.copy()
+    rho = ADMMrho
     mu = 10
-    max_iter = 500
+    if arch == 'mlpnet':
+        max_iter = 200
+    else:
+        max_iter = 50 #MobileNetV1,Res20
+
+    if arch == 'resnet50' or 'mobilenetv1':
+        tol = 1e-3
+        
     itr = 0
-    f_old = 0
-    while itr < max_iter:
-        itr += 1
-        w_old = w.copy()
-        v_old = v.copy()
-        #vec_tmp = grads.T @ (grads @ w_bar) + 2*lambda2 * w_bar + s_vec - rho * (u-v)
-        #w = solve_XTX_lambda_inv(grads, V, S, vec_tmp, 2*lambda2, cache=None)
-        w = solve_w_subproblem(X=grads, w_bar=w_bar, s_vec=s_vec, u=u, v=v_old, lambda2=lambda2, rho=rho, w_init=w_old, tol=1e-4,maxiter=50)
-        v, s = SM_proj_l1_linf(w + u, v_old, K, M, base_len, sub_rho1, sub_rho2, rho, lengths)
-        #v, s = prox_l1_linf(w + u, sub_rho1, sub_rho2, rho)
-        u = u + w - v
-        r_norm = np.linalg.norm(w - v)
-        d_norm = rho * np.linalg.norm(w - w_old)
-        if adaptive_rho:
-            if r_norm > mu * d_norm:
-                rho *= 2
-                u /= 2
-            elif d_norm > mu * r_norm:
-                rho /= 2
-                u *= 2
-        r_new = y - grads@v
-        s_sum = np.sum(lengths * s)
-        f_new = 0.5 * r_new @ r_new + lambda2 * np.dot(w-w_bar, w-w_bar) + sub_rho1 * np.sum(np.abs(v)) + sub_rho2/K * s_sum  - np.dot(v, s_vec)
-        #if r_norm < tol and d_norm < tol and abs(f_new-f_old) <= epsilon:
-        if abs(f_new-f_old) <= epsilon:
-            #print('ADMM Acc break')
+    itr_sub = 0
+    BinaryRes_old = 0
+    Knorm_old = 0
+    while True:
+        w = v.copy()
+        alpha = sub_rho1 + sub_rho2/K
+        grad_K2norm = np.zeros_like(w)
+        grad_K2norm[top_K_idx] = np.sign(w[top_K_idx])
+        s_vec =  alpha * grad_K2norm 
+        b_part = b_part1 + s_vec
+        itr_sub += 1
+        itr = 0
+
+        while itr < max_iter:
+            itr += 1
+            w_old = w.copy()
+            v_old = v.copy()
+
+            w = solve_w_subproblem(b_part, X=grads, w_bar=w_bar, s_vec=s_vec, u=u, v=v_old, lambda2=lambda2, rho=rho, w_init=w_old, tol=1e-4,maxiter=50)
+            v, s, top_K_idx = SM_proj_l1_linf(w+u, K, M, lengths, sub_rho1, sub_rho2, rho, offsets)
+            u = u + w - v
+            r_norm = np.linalg.norm(w-v)
+            d_norm = rho*np.linalg.norm(v-v_old)
+
+            r_rel = r_norm / max(np.linalg.norm(w),np.linalg.norm(v),1.0)
+            d_rel = d_norm / max(np.linalg.norm(w),np.linalg.norm(v),1.0)
+
+            if adaptive_rho:
+                if r_norm > mu * d_norm:
+                    rho *= 2
+                    u /= 2
+                elif d_norm > mu * r_norm:
+                    rho /= 2
+                    u *= 2
+            abs_v = np.abs(v)
+            L1norm = np.sum(np.abs(v))
+            Knorm = np.sum(abs_v[top_K_idx])
+            SparseRes = L1norm - Knorm
+            BinaryRes = np.sum(lengths * s) - Knorm
+            if Knorm > 0:
+                SparseRatio = 1 - SparseRes/Knorm
+                BinaryRatio = 1 - BinaryRes/Knorm
+            else:
+                SparseRatio = 0
+                BinaryRatio = 0
+                
+            print('itr:',itr,'d_rel:',d_rel,'r_rel',r_rel,'rho:',rho,'Knorm:',Knorm)
+            print('SparseRes:',SparseRes,'SparseRatio:',SparseRatio,'BinaryRes:',BinaryRes,'BinaryRatio:',BinaryRatio)
+
+            #print('SparseRes_w:',SparseRes_w,'SparseRatio_w:',SparseRatio_w,'BinaryRes_w:',BinaryRes_w,'BinaryRatio_w:',BinaryRatio_w)
+            #if  SparseRatio > 0.999 and BinaryRatio > 0.99 and r_rel < 1e-1 and d_rel < 1e-1:
+            if  SparseRatio > 0.999 and BinaryRatio > 0.99 and abs(BinaryRes-BinaryRes_old) <= max(BinaryRes, BinaryRes_old)*1e-2 and abs(Knorm-Knorm_old) <= max(Knorm, Knorm_old)*1e-2 and itr > 1:
+                break
+            
+            if r_rel < tol and d_rel < tol:
+                break
+            BinaryRes_old = BinaryRes
+            Knorm_old = Knorm
+        if itr_sub >= max_sub:
             break
-        f_old = f_new
-    #return w, s
-    return v, s
-#只有一个s的取值时，ADMM求解子问题
-def ADMMSubProblem(y, grads,  w_start, w_bar, s_start, s_vec, lambda2,  ADMMrho, sub_rho1, sub_rho2, tol = 1e-4, epsilon=1e-4, adaptive_rho=True):
+    #print('itr:',itr,'d_rel:',d_rel,'r_rel',r_rel,'rho:',rho,'Knorm:',Knorm)
+    #print('SparseRes:',SparseRes,'SparseRatio:',SparseRatio,'BinaryRes:',BinaryRes,'BinaryRatio:',BinaryRatio)
+    return w, v, s, SparseRatio, BinaryRatio, SparseRes, BinaryRes, top_K_idx
+
+#only one s value, ADMM subproblem
+def ADMMSubProblem(b_part, y, grads,  w_start, w_bar, s_start, s_vec, lambda2,  ADMMrho, sub_rho1, sub_rho2, tol = 1e-4, epsilon=1e-4, adaptive_rho=True):
     w = w_start.copy()
     v = np.zeros_like(w)
     u = np.zeros_like(w)
@@ -640,15 +577,14 @@ def ADMMSubProblem(y, grads,  w_start, w_bar, s_start, s_vec, lambda2,  ADMMrho,
     mu = 10
     max_iter = 500
     itr = 0
-    f_old = 0
+
     while itr < max_iter:
         itr += 1
         w_old = w.copy()
         v_old = v.copy()
-        #vec_tmp = grads.T @ (grads @ w_bar) + 2*lambda2 * w_bar + s_vec - rho * (u-v)
-        #w = solve_XTX_lambda_inv(grads, V, S, vec_tmp, 2*lambda2, cache=None)
-        w = solve_w_subproblem(X=grads, w_bar=w_bar, s_vec=s_vec, u=u, v=v, lambda2=lambda2, rho=rho, w_init=w_old, tol=1e-4,maxiter=50)
-        #v, s = SM_proj_l1_linf(w + u, K, M, base_len, sub_rho1, sub_rho2, rho)
+
+        w = solve_w_subproblem(b_part, X=grads, w_bar=w_bar, s_vec=s_vec, u=u, v=v, lambda2=lambda2, rho=rho, w_init=w_old, tol=1e-4,maxiter=50)
+
         v, s = prox_l1_linf(w + u, sub_rho1, sub_rho2, rho)
         u = u + w - v
         r_norm = np.linalg.norm(w - v)
@@ -660,12 +596,11 @@ def ADMMSubProblem(y, grads,  w_start, w_bar, s_start, s_vec, lambda2,  ADMMrho,
             elif d_norm > mu * r_norm:
                 rho /= 2
                 u *= 2
-        r_new = y - grads@w
-        f_new = 0.5 * r_new @ r_new + lambda2 * np.dot(w-w_bar, w-w_bar) + sub_rho1 * np.sum(np.abs(v)) + sub_rho2 * s  - np.dot(w, s_vec)
-        if r_norm < tol and d_norm < tol and abs(f_new-f_old) <= epsilon:
-            #print('ADMM Acc break')
+        #r_new = y - grads@w
+        #f_new = 0.5 * r_new @ r_new + lambda2 * np.dot(w-w_bar, w-w_bar) + sub_rho1 * np.sum(np.abs(v)) + sub_rho2 * s  - np.dot(w, s_vec)
+        if r_norm < tol and d_norm < tol:
             break
-        f_old = f_new
+ 
     return w, s
 
 @nb.njit(cache=True)
@@ -692,7 +627,7 @@ def NewCompute_nbar(what_abs, shat, sort_idx):
 
     return n_bar, s
 
-#仅做||w||_{inf} <= s的投影
+#||w||_{inf} <= s
 @nb.njit(cache=True)
 def sLinf_Proj(what, shat, K, sort_idx=None):
     what_abs = np.abs(what)
@@ -709,7 +644,6 @@ def sLinf_Proj(what, shat, K, sort_idx=None):
         w[nbar_idx] = np.sign(what[nbar_idx])*s
         return w, s, sort_idx[:K]
 
-#对于分段无穷范数的约束投影，shat=[shat1,shat2,...,shatm]
 @nb.njit(cache=True)
 def SM_LinfProj(what, shat, K, M, base_len):
     what_abs = np.abs(what)
@@ -729,7 +663,8 @@ def SM_LinfProj(what, shat, K, M, base_len):
             start = end
     
         #进行投影时为了保序，将其余 K - (M-1)*base_len + n-K个全部放入最后一段
-        Pieces.append(sort_what_abs[(M-1)*base_len:])
+        #Pieces.append(sort_what_abs[(M-1)*base_len:])
+        Pieces.append(sort_what_abs[(M-1)*base_len:K])
     else:
         Pieces.append(sort_what_abs)
 
@@ -751,139 +686,217 @@ def SM_LinfProj(what, shat, K, M, base_len):
     
     return w_new, s_arr, top_K_idx
 
-def SMSB_OneStep(M, y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99,max_sub=5):
+#M value s, DCADP problem
+def SMSB(arch, M, y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, SparseRhoRatio=1e-4, BinaryRhoRatio=1e-2,ConvergenceRatio=0.99,max_sub=5):
     
     st = time()
     itr_rho = 1
-    
+    ConverFlag = False
     objs = []
     epsilon = init_tol
     
-    ####将起始点从w_bar更换为根据w_bar的前K支集求解的SB解
-    base_len = K // M#将长度为K的数组均分成M段，每段应该有base_len个数字
-    remainder = K % M#剩下的remainder个全部放进最后一个数组
-    lengths = np.full(M, base_len, dtype=np.int64)  # 前 M-1 段都是 base_len
-    lengths[-1] += remainder#最后一段长度是base_len + remainder
-    top_K_idx = np.argsort(-np.abs(w_bar))[:K]
-    a = np.max(np.abs(w_bar))
-    b = abs(w_bar[top_K_idx[-1]])
-    s_rho = np.linspace(a, b, M)
+    base_len = K // M
+    remainder = K % M
 
-    w_rho = np.copy(w_bar)
-    w_rho[top_K_idx] = b
-    r_rho = y - grads@w_rho
+    lengths = np.full(M, base_len, dtype=np.int64)
+
+    if remainder > 0:
+        lengths[-remainder:] += 1
+    print('base len:',base_len,'final block:',lengths[-1])
+    if arch == 'mobilenetv1' or arch == 'resnet50':
+        Kexp = K#MobileNetV1,Res50
+    else:
+        #Kexp = min(int(K*1.5), int(len(w_bar)*0.9))#Res20,MLPNet
+        Kexp = K
+    top_Kexp_idx = np.argpartition(np.abs(w_bar), -Kexp)[-Kexp:]
+    top_K_idx = np.argpartition(np.abs(w_bar), -Kexp)[-K:]
+    top_K_idx = top_K_idx[np.argsort(-np.abs(w_bar[top_K_idx]))]
+    
+    idx_arr = []
+    start = 0
+    
+    for i in range(M):
+        length = lengths[i]
+        end = start + length
+        idx_block = top_K_idx[start:end]
+        idx_arr.append(idx_block)
+        start += length
+    s_rho = np.zeros(M)
+    block = 0
+    for i in range(M):
+        idx = top_K_idx[block]
+        s_rho[i] = abs(w_bar[idx])
+        block += lengths[i]
+
+    w_rho = np.zeros_like(w_bar)
+    w_rho[top_Kexp_idx] = w_bar[top_Kexp_idx]
 
     abs_w = np.abs(w_rho)
     L1norm = np.sum(abs_w)
     Knorm = np.sum(abs_w[top_K_idx])
 
+    SparseRes = L1norm - Knorm
+    BinaryRes = np.sum(lengths * s_rho) - Knorm
+    r_rho = y - grads@w_rho
     f_original = 0.5*np.dot(r_rho,r_rho) + lambda2*np.dot(w_rho-w_bar,w_rho-w_bar)
+    print('arch:',arch)
+    if arch == 'mobilenetv1' or arch == 'resnet50':
+        sub_rho1 = 1e-5
+        sub_rho2 = 1
+    else:
+        #MLPNet:SparseRhoRatio=1e-2,BinaryRhoRatio=1e-1
+        if SparseRes > 0:
+            sub_rho1 = f_original/SparseRes * SparseRhoRatio 
+        else:
+            sub_rho1 = 1e-5
+        if BinaryRes > 0:
+            sub_rho2 = f_original/BinaryRes * BinaryRhoRatio * K
+        else:
+            sub_rho2 = 1
+        
+    print('sub_rho1 start:',sub_rho1,'sub_rho2 start/K:',sub_rho2/K,'num of w:',len(w_bar),'f_ori:',f_original,'Convergence Ratio:',ConvergenceRatio)
+    print('SparseRes:',SparseRes,'BinaryRes:',BinaryRes)
+    F_old = 0
+    f_ori_old = 0
+    
+    w_rho = np.zeros_like(w_bar)
+    w_rho[top_Kexp_idx] = w_bar[top_Kexp_idx]
+    w_app = w_rho.copy()
 
-    penaltySparse = L1norm - Knorm
-    penaltyBinary = np.sum(lengths * s_rho) - Knorm
-    """
-    #对于MLP,SP=0.3, M=4
-    sub_rho1 = f_original / penaltySparse * rhoStartRatio
-    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio * 1e-2
-    """
-    """
-    #MLP
-    sub_rho1 = f_original / penaltySparse * rhoStartRatio * 1e-2 #MLP,当过稀疏时，*1e-2减小sub_rho1，同时减小sub_rho2
-    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio * 1e-2
-    """
-    """
-    #LeNet SP=0.3,0.4,0.5, M=64, 127
-    sub_rho1 = f_original / penaltySparse * rhoStartRatio * 1e-1
-    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio * 10
-    """
-    """
-    #LeNet SP=0.6,0.7,M=64, 127
-    sub_rho1 = f_original / penaltySparse * rhoStartRatio * 1e-1
-    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio
-    """
-    
-    #Res SP=0.3,0.4,0.5, M=64, 127
-    sub_rho1 = f_original / penaltySparse * rhoStartRatio * 1e-1
-    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio * 10
-    
-    """
-    #Res SP=0.6, 0.7, M=64, 127
-    sub_rho1 = f_original / penaltySparse * rhoStartRatio
-    sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio
-    """
-    #print('sub_rho1 start:',sub_rho1,'sub_rho2 start:',sub_rho2)
+    b_part1 = grads.T @ (grads @ w_bar) + 2*lambda2 * w_bar
+    offsets=np.zeros(M+1,dtype=np.int64)
+    for i in range(M):
+        offsets[i+1]=offsets[i]+lengths[i]
 
     while True:
         
         w_now = w_rho.copy()
-        s_now = s_rho
-        epsilon /= itr_rho
-        epsilon = max(epsilon, 1e-5)
-        itr_sub = 0
-        st = time()
-        alpha = (sub_rho1 + sub_rho2/K)
-
-        s_vec = np.zeros_like(w_bar)
-        while True:
-            itr_sub += 1
-  
-            grad_K2norm = np.zeros_like(w_now)
-            grad_K2norm[top_K_idx] = np.sign(w_now[top_K_idx])
-            s_vec =  alpha * grad_K2norm 
-            
-            #ADMM求解子问题
-            ADMMrho = sub_rho1 / max(np.min(np.abs(w_now[top_K_idx])) * 10, 1e-5)#这个ADMM里的rho的选取确保不会过稀疏
-            w_new, s_new = SM_ADMMSubProblem(y, grads, w_now, w_bar, s_now, s_vec, lambda2, ADMMrho, sub_rho1, sub_rho2, K, M, base_len, lengths, tol = 1e-4, epsilon=epsilon, adaptive_rho=True)
-
-            if  itr_sub >= max_sub:
-                w_rho = w_new.copy()
-                s_rho = s_new.copy()
-                break
-
-            w_now = w_new
-            s_now = s_new
-
+        s_now = s_rho.copy()
         
-        abs_w = np.abs(w_rho)
-        top_K_idx = np.argsort(-abs_w)[:K]
+        ADMMrho = sub_rho1 / max(np.min(np.abs(w_now[top_K_idx])) * 10, 1e-5)
+        w_app, w_rho, s_rho, SparseRatio, BinaryRatio, SparseRes, BinaryRes,top_K_idx = SM_ADMMSubProblem(arch, offsets, b_part1, max_sub, top_K_idx, y, grads, w_app, w_now, w_bar, s_now, lambda2, ADMMrho, sub_rho1, sub_rho2, K, M, base_len, lengths, tol = 1e-3, epsilon=1e-3, adaptive_rho=True)
 
-        number_nonzero = np.sum(abs_w > 0)
-        L1norm = np.sum(np.abs(w_rho))
-        Knorm = np.sum(abs_w[top_K_idx])
+        idx_arr = []
+        start = 0
+        for i in range(M):
+            length = lengths[i]
+            end = start + length
+            idx_block = top_K_idx[start:end]
+            idx_arr.append(idx_block)
+            start += length
 
-        SparseRes = L1norm - Knorm
-        BinaryRes = np.sum(lengths * s_rho) - Knorm
-
-        if SparseRes > 1e-1:
-            sub_rho1 *= rho_ratio
-        if BinaryRes > 1e-1:
-            sub_rho2 *= rho_ratio
-        if SparseRes <= 1e-1 and BinaryRes <= 1e-1:
+        sub_rho1 *= rho_ratio
+        sub_rho2 *= rho_ratio
+        
+        if arch == 'mobilenetv1' or arch == 'resnet50':
+            if SparseRatio > ConvergenceRatio and BinaryRatio > ConvergenceRatio:
+                ConverFlag = True
+        else:
+            if SparseRes < 1e-1 and BinaryRes < 1e-1:
+                ConverFlag = True
+                
+        if ConverFlag:
             print('Cons Res Satisfy')
-            w_new = np.zeros_like(w_bar)
+            w_sign = np.zeros_like(w_bar)
+            w_sign[top_K_idx] = np.sign(w_rho[top_K_idx])
+
+            s_final = solve_sVec_CG(b_part1, grads,w_sign,w_bar,idx_arr,lambda2,a0=s_rho,rtol=1e-5,atol=1e-8,maxiter=100)
+            w_new = w_rho.copy()
             ptr = 0
             for j in range(len(lengths)):
-                s = s_rho[j]
-                if j <= M-2:
-                    L = lengths[j]
-                else:
-                    L = base_len + remainder
+                s = s_final[j]
+                L = lengths[j]
                 for i in range(L):
                     idx = top_K_idx[ptr]
                     w_new[idx] = np.sign(w_rho[idx]) * s
                     ptr += 1
-            w_rho = w_new
+            """
+            r_rho = y - grads@w_rho
+            f_ori_rho = 0.5*(r_rho@r_rho) + lambda2*np.dot(w_rho-w_bar, w_rho-w_bar)
+            
+            r_new = y - grads@w_new
+            f_ori_new = 0.5*(r_new@r_new) + lambda2*np.dot(w_new-w_bar, w_new-w_bar)
+            print('f_rho final:',f_ori_rho,'unique value:',len(np.unique(np.abs(w_rho))))
+            print('f_new final:',f_ori_new,'unique value:',len(np.unique(np.abs(w_new))))
+            print('||w_rho - w_new||_1:',np.sum(np.abs(w_rho-w_new)),'||w_rho - w_new||_inf:',np.max(np.abs(w_rho-w_new)),'||w_rho - w_new||^2:',np.dot(w_rho-w_new,w_rho-w_new))
+
+            cnt = np.sum(np.sign(w_rho) != np.sign(w_new))
+            print('diff sign count:',cnt)
+            print('||s_sol - s_smsb||_inf:',np.max(np.abs(s_final-s_rho)),'||s_sol-s_smsb||_1:',np.sum(np.abs(s_final-s_rho)))
+            print('s_final < 0 count:',np.sum(s_final<0),'s_rho < 0 count:',np.sum(s_rho < 0))
+            """
             break
-        
-        itr_rho += 1
-        epsilon = init_tol/itr_rho
-
+            
     sol_time = time()-st
+    print('sol time:',sol_time)
+    return w_new, s_final, objs, sol_time, epsilon
 
-    return w_rho, s_rho, objs, sol_time, epsilon
+def solve_sVec_CG(qw_bar, X,w,w_bar,idx_arr,lambda2,a0=None,rtol=1e-8,atol=1e-12,maxiter=100):
 
-#只有一个s值时的SB问题求解
-def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99, max_itr=1):
+
+    M = len(idx_arr)
+    n = len(w_bar)
+
+    def expand(a):
+
+        z = np.zeros(n)
+
+        for i, idx in enumerate(idx_arr):
+            z[idx] = w[idx] * a[i]
+
+        return z
+
+    def reduce(u):
+
+        out = np.zeros(M)
+
+        for i, idx in enumerate(idx_arr):
+            out[i] = np.dot(w[idx], u[idx])
+
+        return out
+
+
+    # --------------------------
+    # H*v=W^T Q W v
+    # --------------------------
+    def Hv(v):
+
+        z = expand(v)
+
+        qz = (
+            X.T @ (X @ z)
+            +2*lambda2*z
+        )
+
+        return reduce(qz)
+
+
+    H = LinearOperator(
+        (M,M),
+        matvec=Hv,
+        dtype=np.float64
+    )
+
+
+    # --------------------------
+    # b=W^T Q w_bar
+    # --------------------------
+    #qw_bar = (X.T @ (X @ w_bar) +2*lambda2*w_bar)
+
+    b = reduce(qw_bar)
+
+
+    # --------------------------
+    # CG solve
+    # --------------------------
+    a, info = cg(H,b,x0=a0,rtol=rtol,atol=atol,maxiter=maxiter)
+
+
+    return a
+
+
+#Only one s value DCADP problem
+def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_start2 = 1, rho_ratio=2, rhoStartRatio=1e-2, ConvergenceRatio=0.99, max_sub=1):
     
     st = time()
     itr_rho = 1
@@ -915,18 +928,26 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
     penaltyBinary = K*s_rho - Knorm
     sub_rho1 = f_original / penaltySparse * rhoStartRatio
     sub_rho2 = f_original / penaltyBinary  * K * rhoStartRatio
+    print('s_start:',s_rho,'sub_rho1 start:',sub_rho1,'sub_rho2/K start:',sub_rho2/K)
     
+    #top_K_idx_old = top_K_idx.copy()
+    signSupp = np.sign(w_rho[top_K_idx])
+    signSupp_old = signSupp.copy()
+    f_old = 0
+    mu = 1e-12
+    b_part1 = grads.T @ (grads @ w_bar) + 2*lambda2 * w_bar
     while True:
         
         w_now = w_rho.copy()
         s_now = s_rho
+        r_now = r_rho.copy()
 
-
+        f_new = 0
         epsilon /= itr_rho
         epsilon = max(epsilon, 1e-5)
         itr_sub = 0
-
         alpha = (sub_rho1 + sub_rho2/K)
+
         s_vec = np.zeros_like(w_bar)
         while True:
             itr_sub += 1
@@ -934,18 +955,21 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
             grad_K2norm = np.zeros_like(w_now)
             grad_K2norm[top_K_idx] = np.sign(w_now[top_K_idx])
             s_vec =  alpha * grad_K2norm 
-            ADMMrho = sub_rho1 / np.min(np.abs(w_now[top_K_idx])) * 10#这个ADMM里的rho的选取确保不会过稀疏
-            #ADMM求解子问题
-            w_new, s_new = ADMMSubProblem(y, grads, w_now, w_bar, s_now, s_vec, lambda2, ADMMrho, sub_rho1, sub_rho2, tol = 1e-6, epsilon=epsilon, adaptive_rho=True)
-     
-            if itr_sub >= max_itr:
+            ADMMrho = sub_rho1 / np.min(np.abs(w_now[top_K_idx])) * 10
+            b_part = b_part1 + s_vec
+
+            w_new, s_new = ADMMSubProblem(b_part, y, grads, w_now, w_bar, s_now, s_vec, lambda2, ADMMrho, sub_rho1, sub_rho2, tol = 1e-6, epsilon=epsilon, adaptive_rho=True)
+            
+            if itr_sub >= max_sub:
                 w_rho = w_new.copy()
                 s_rho = s_new
-
                 break
-
+            
             w_now = w_new
             s_now = s_new
+   
+        
+        abs_w = np.abs(w_rho) 
 
         top_K_idx = np.argpartition(abs_w, -K)[-K:]
         L1norm = np.sum(np.abs(w_rho))
@@ -953,27 +977,13 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
 
         SparseRatio = 1 - (L1norm - Knorm)/Knorm
         BinaryRatio = 1 - (K*s_rho - Knorm)/Knorm
-        
-        if SparseRatio >= 1 and BinaryRatio > ConvergenceRatio:
-            print('Sparse Satisfy') 
-            u = np.zeros_like(w_rho)
-            u[top_K_idx] = np.sign(w_rho[top_K_idx])
-            A_u = grads.T @ (grads @ u) + lambda2 * u    # 等于 (X^T X + lambda I) * u
-            A_w = grads.T @ (grads @ w_bar) + lambda2 * w_bar
-            alpha = u.dot(A_u)    # u^T A u
-            beta  = u.dot(A_w)    # u^T A wbar
-            s_rho = beta / alpha
-            w_rho = u * s_rho
-            abs_w = np.abs(w_rho) 
-            s_Count = np.sum(np.abs((abs_w - s_rho)) <= 1e-6)
 
-            break
         if SparseRatio > ConvergenceRatio and BinaryRatio > ConvergenceRatio:
             print('Constrain Nearly Satisfy') 
             u = np.zeros_like(w_rho)
 
             u[top_K_idx] = np.sign(w_rho[top_K_idx])
-            A_u = grads.T @ (grads @ u) + lambda2 * u    # 等于 (X^T X + lambda I) * u
+            A_u = grads.T @ (grads @ u) + lambda2 * u    # (X^T X + lambda I) * u
             A_w = grads.T @ (grads @ w_bar) + lambda2 * w_bar
             alpha = u.dot(A_u)    # u^T A u
             beta  = u.dot(A_w)    # u^T A wbar
@@ -988,43 +998,20 @@ def OneS_SB(y, grads, w_bar, lambda2, K, init_tol=1e-3, rho_start1 = 1e-2, rho_s
             sub_rho1 *= rho_ratio
             sub_rho2 *= rho_ratio    
 
-
         itr_rho += 1
         epsilon = init_tol/itr_rho
-
     sol_time = time()-st
 
     return w_rho, s_rho, objs, sol_time, epsilon
 
-#旧DCA的罚形式目标函数值
-@nb.njit(cache=True)
-def penalty_OldDCA(r, w_t, w_bar, sub_rho, K, lambda2):
- 
-    top_K_idx = np.argpartition(np.abs(w_t), -K)[-K:]
-    w_tabs = np.abs(w_t)
-    w_tKnorm = np.sum(w_tabs[top_K_idx])
-  
-    w_sub = w_t - w_bar
-    return 0.5*np.dot(r,r) + lambda2*np.dot(w_sub,w_sub) + sub_rho*(np.linalg.norm(w_t,1) - w_tKnorm)
 
-#计算旧DCA的罚函数的梯度
-@nb.njit(cache=True)
-def gradient_OldDCA(grads, r, w_t, w_bar, lambda2, sub_rho, K):
-    grad1 = -grads.T @ r + 2 * lambda2 * (w_t - w_bar)
-
-    grad2 = sub_rho * np.sign(w_t)
-    top_K_idx = np.argpartition(np.abs(w_t), -K)[-K:]
-    grad2[top_K_idx] = 0
-
-    return grad1 + grad2
-
-#计算原始DCA方法的更新解，合并了s的计算，步长step = 1/(2*lambda1)
+#update of w in DCA
 @nb.njit(cache=True)
 def DCA_update(w, r, w_bar, rho, grads, step, lambda2, K):
     # Calculate the w_t in DCA
     w_t = np.zeros_like(w_bar)
     lambda1 = 1/(2*step)
-    #lambda1 = -1/step
+
     grad1 = grads.T@r + 2*(-lambda2 + lambda1) * (w-w_bar)
     #grad1 = grads.T@r + (-2*lambda2 + lambda1) * (w-w_bar)
  
@@ -1049,12 +1036,14 @@ def DCA_update(w, r, w_bar, rho, grads, step, lambda2, K):
     return w_t
 
 
-#初始化一个支集作为Active Set策略的开始
+#init Active Set
 def DCAinitial_active_set(y,grads,w_bar,r,k,step,lambda2,sub_rho,M=np.inf,kimp=1.5,act_itr=1, s= np.inf):
     
     p = w_bar.shape[0]
     #将支集容量拓宽至稀疏度的kimp倍
     ksupp = int(np.max([np.min([kimp*k, p]),k]))
+    if ksupp == p:
+        ksupp = int(p-1)
     w_tmp, r_tmp = np.copy(w_bar), np.copy(r)
     for i in range(act_itr):
         w_tmp = DCA_update(w_tmp, r_tmp, w_bar, sub_rho, grads, step, lambda2, ksupp)
@@ -1063,7 +1052,7 @@ def DCAinitial_active_set(y,grads,w_bar,r,k,step,lambda2,sub_rho,M=np.inf,kimp=1
     
     return active_set
 
-#Active Set策略+BB步长的DCA在非零初始支集开始的函数总入口
+#Active Set + BB-Step DCA
 def Active_BBDCA_PP(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_start=1e-2, rho_ratio=2, init_step=1, ArmijoM=10, act_max_itr=5, sea_max_itr=10):
     nnz_idx = np.where(np.linalg.norm(grads, axis=0)**2)[0]
     w_new = np.zeros_like(w_bar)
@@ -1080,24 +1069,32 @@ def Active_BBDCA_PP(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rh
     #print('f:',f,'iter_number:',total_iter)
     return w_new, f, r, total_iter, tot_time, epsilon
 
-#使用f_ref选取策略的BB法+Armijo
+#f_ref-BBstep-Armijo
 def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_start=1e-8, rho_ratio=2, init_step=1, ArmijoM=10):
     st = time()
     lambda1_tmp = 1.05*(skl_svd(grads)**2+lambda2*2)
 
-    init_step = 1/lambda1_tmp
+    init_step = 1/(lambda1_tmp*100)
     iter_rho = 1
     iter_number = 0
 
-    w_now = w_bar.copy()
-    r_now = y - grads@w_now
-    #w_rho = w_bar.copy()
-    sub_rho = rho_start
+    sub_rho = 1e-5
     objs = []
     L = ArmijoM
     epsilon = init_tol
     f_now = np.inf
-    #step_old = 0
+    Kexp = min(int(K*2), int(len(w_bar)*0.9))
+    top_Kexp_idx = np.argpartition(np.abs(w_bar), -Kexp)[-Kexp:]
+    top_K_idx = np.argpartition(np.abs(w_bar), -K)[-K:]
+    w_now = np.zeros_like(w_bar)
+    w_now[top_Kexp_idx] = w_bar[top_Kexp_idx]
+    SparseRes = np.sum(np.abs(w_now)) - np.sum(np.abs(w_now[top_K_idx]))
+    r_now = y - grads@w_now
+    f_ori = 0.5*r_now@r_now + lambda2*np.dot(w_now-w_bar,w_now-w_bar)
+    sub_rho = f_ori/SparseRes * 1e-2
+    if sub_rho == 0:
+        sub_rho = 1e-2
+    print('sub_rho:',sub_rho,'f_ori:',f_ori,'SparseRes:',SparseRes,'||w_now-w_bar||_:',np.sum(np.abs(w_now-w_bar)))
     while True:
         #w_rho = w_now.copy()
         l = 0
@@ -1139,82 +1136,162 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                         print('sy:',sy)
                         step = 0.1
                     elif iter_number % 2 == 0:
+                    #elif itr_in % 2 == 0:
                         step = sy /np.dot(yBB, yBB)
                     else:
                         step = np.dot(sBB,sBB)/sy
                 #step = max(1e-3, step)
 
-            #itr_search = 0
             while True:
-                #itr_search += 1
                 w_trial = DCA_update(w_now, r_now, w_bar, sub_rho, grads, step, lambda2, K)
+                
                 if iter_number == 0:
                     w_temp = np.zeros_like(w_trial)
                     top_K_idx = np.argpartition(np.abs(w_trial), -K)[-K:]
                     w_temp[top_K_idx] = w_trial[top_K_idx]
                     w_trial = w_temp
-
+                
                 d = w_trial - w_now
-                
                 r_trial = y-grads@w_trial
-                
                 top_K_idx = np.argpartition(np.abs(w_trial), -K)[-K:]
                 Knorm = np.sum(np.abs(w_trial[top_K_idx]))
-                f_trial = evaluate_original(r_trial, w_trial, w_bar, lambda2) + sub_rho * (np.sum(np.abs(w_trial)) - Knorm)
+                SparseRes = np.sum(np.abs(w_trial)) - Knorm
+                f_ori = evaluate_original(r_trial, w_trial, w_bar, lambda2)
+                f_trial =  f_ori + sub_rho * SparseRes
                 
                 iter_number += 1
 
                 if f_trial <= f_ref + 1e-4 * np.dot(g_penaltynow, d):
                     itr_in += 1
                     objs.append(f_trial)
-                    #step_old = step
+
                     break
                 else:
                     step *= 0.5
 
-            if np.dot(w_trial-w_now, w_trial-w_now) <= epsilon and abs(f_trial - f_now) <= min(1e-2, 1e-2*abs(f_now)):
+            if np.dot(w_trial-w_now, w_trial-w_now) <= epsilon and abs(f_trial - f_now) <= min(1e-2, 1e-3*abs(f_now)):
                 rhoFlag = True
 
-            if itr_in == 1:
-                f_best = f_trial
-                f_c = f_best
-            
-            if f_trial < f_best:
-                f_best = f_trial
-                f_c = f_trial
-                l = 0
-            else:
-                f_c = max(f_c, f_trial)
-                l += 1
-                if l == L:
-                    f_ref = f_c
-                    f_c = f_trial
-                    l = 0
-                    
             f_now = f_trial
             w_old = w_now
-            #r_old = r_now
+
 
             w_now = w_trial
             r_now = r_trial
             g_penaltyold = g_penaltynow
-            
+            number_nonzero = np.count_nonzero(w_trial)
+
             if rhoFlag:
                 break
             
-        number_nonzero = np.count_nonzero(w_trial)
         if number_nonzero <= K:
             break
         else:
             sub_rho *= rho_ratio
             iter_rho += 1
             epsilon = init_tol/iter_rho
+            w_now = w_trial.copy()
+            r_now = y - grads@w_now
     
     sol_time = time()-st
 
     return w_trial, r_trial, iter_number, sol_time, sub_rho, epsilon
 
-#使用Active Set策略+BB步长+ref策略的DCA
+def solve_subset_zero_cg(
+        X,
+        idx,
+        w_bar,
+        lambda2,
+        w0=None,
+        rtol=1e-8,
+        atol=1e-12,
+        maxiter=100):
+
+    """
+    Solve:
+
+    min 0.5*(w-w_bar)^T(X.T@X+2*lambda2*I)(w-w_bar)
+
+    subject to:
+        w[i]=0, i not in idx
+
+    """
+
+    idx = np.asarray(idx, dtype=np.int64)
+
+    n = len(w_bar)
+    K = len(idx)
+
+    # -----------------------------
+    # RHS: (Q @ w_bar)_S
+    # -----------------------------
+    
+    Xw = X @ w_bar
+
+    Qw_bar = X.T @ Xw + 2 * lambda2 * w_bar
+
+    b = Qw_bar[idx]
+
+
+    # -----------------------------
+    # Linear operator:
+    # (X_S.T X_S + 2lambda I)v
+    # -----------------------------
+
+    def matvec(v):
+
+        tmp = X[:, idx] @ v
+
+        out = X[:, idx].T @ tmp
+
+        out += 2 * lambda2 * v
+
+        return out
+
+
+    A = LinearOperator(
+        shape=(K, K),
+        matvec=matvec,
+        dtype=w_bar.dtype
+    )
+
+
+    # -----------------------------
+    # initial point
+    # -----------------------------
+
+    if w0 is None:
+        x0 = None
+    else:
+        x0 = w0[idx]
+
+
+    # -----------------------------
+    # CG
+    # -----------------------------
+
+    wS, info = cg(
+        A,
+        b,
+        x0=x0,
+        rtol=rtol,
+        atol=atol,
+        maxiter=maxiter
+    )
+
+
+    # -----------------------------
+    # recover full vector
+    # -----------------------------
+
+    w = w0.copy()
+
+    w[idx] = wS
+
+
+    return w
+
+#Active Set+BB+ref DCA
 def Active_refBBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_start=1e-2, rho_ratio=2, init_step=1, ArmijoM=10, act_max_itr=5, sea_max_itr=10, kmip=1.5):
     st = time()
     p = w_bar.shape[0]
@@ -1228,15 +1305,13 @@ def Active_refBBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rh
     total_iter = 0
     sub_rho = rho_start
     w = w_bar
-    
     active_set = DCAinitial_active_set(y, grads, w_bar,r,K,1/(2*lambda1),lambda2,sub_rho=rho_start,M=np.inf,kimp=kmip,act_itr=1)
-    #print('len(active_set):',len(active_set))
+
     while act_cur_itr < act_max_itr:
         grads_act = grads[:,active_set]
         w_act = w[active_set]
         step_act = step
         L_act = 0.5*1.05*(skl_svd(grads_act)**2+lambda2*2)
-        #step_act = 1/(2*L_act)
         w_act, r_act, iter_act, time_act, sub_rho, epsilon = ref_BBDCA(y, grads_act, lambda2, w_act, K, rho_delta, init_tol = init_tol, rho_start=rho_start, rho_ratio=rho_ratio, init_step=step_act, ArmijoM=ArmijoM)
         total_iter += iter_act
         
@@ -1253,7 +1328,6 @@ def Active_refBBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rh
     
         while search_cur_itr < sea_max_itr:
             w_tmp = DCA_update(w, r, w_bar, sub_rho, grads, step_search, lambda2, K)
-
             r_tmp = y - grads@w_tmp
             total_iter += 1
             f_new = evaluate_original(r_tmp, w, w_bar, lambda2)    
@@ -1280,7 +1354,7 @@ def Active_refBBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rh
     
     return w, f, r, act_cur_itr, tot_time, total_iter,epsilon
 
-#Active Set策略+BB步长+ref策略的DCA在非零初始支集的函数总入口
+#Active Set+BB+ref DCA
 def Active_refBBDCA_PP(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_start=1e-2, rho_ratio=2, init_step=1, ArmijoM=10, act_max_itr=5, sea_max_itr=10, kmip=1.5):
     nnz_idx = np.where(np.linalg.norm(grads, axis=0)**2)[0]
     w_new = np.zeros_like(w_bar)
@@ -1295,5 +1369,4 @@ def Active_refBBDCA_PP(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6,
         act_cur_itr=0
         tot_time=0
         total_iter = 0
-    #print('f:',f,'iter_number:',total_iter)
     return w_new, f, r, total_iter, tot_time, epsilon

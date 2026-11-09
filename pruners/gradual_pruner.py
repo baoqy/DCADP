@@ -7,7 +7,7 @@ import copy
 
 class GradualPruner:
     def __init__(self,multi_stage_pruner,train_dataloader,test_dataloader,criterion,
-        params,reset_optimizer,momentum,weight_decay,results,filename,seed,mask=None,model=None,device=None,first_epoch=0,distributed=False,rank=-1,world_size=1):
+        params,reset_optimizer,momentum,weight_decay,results,filename,seed,mask=None,model=None,device=None,first_epoch=0,distributed=False,rank=-1,world_size=1,arch=None):
         set_seed(seed)
         assert not distributed or rank >=0
         self.pruner=multi_stage_pruner       #Pruner may have a subobject of model 
@@ -34,6 +34,7 @@ class GradualPruner:
         self.distributed=distributed
         self.rank = rank
         self.world_size=world_size
+        self.arch = arch
         if self.distributed:
             self.model_without_ddp = self.pruner.pruner.model
         else:
@@ -61,8 +62,9 @@ class GradualPruner:
         torch.cuda.empty_cache()
         gc.collect()
 
-    def prune(self,nepochs,lr_schedule,prunepochs,sparsities,base_level_=0.1):
-
+    def prune(self,nepochs,lr_schedule,prunepochs,sparsities,base_level_=0.1,arch=None):
+        if arch is None:
+            arch = self.arch
         for key in ['epoch','pruning_res','running_loss','acc','lr','momentum','weight_decay']:
             self.results[-1][key] = []
 
@@ -78,7 +80,7 @@ class GradualPruner:
                 else:
                     base_level = base_level_
                 self.model.eval()
-                w_pruned,mask=self.pruner.prune(self.mask,sparsities[epoch_index],base_level,FILE=self.filename)
+                w_pruned,mask=self.pruner.prune(self.mask,sparsities[epoch_index],base_level,FILE=self.filename,arch=arch)
                 self.mask = mask.to(self.device)
                 del mask
                 del w_pruned

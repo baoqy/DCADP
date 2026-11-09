@@ -4,13 +4,14 @@ from utils.main_utils import *
 import sys
 
 class MultiStagePruner:
-    def __init__(self,pruner,test_dataloader,schedule,num_stages,algo='Active_refBBDCA'):
+    def __init__(self,pruner,test_dataloader,schedule,num_stages,algo='Active_refBBDCA',arch=None):
         self.pruner = pruner
         self.test_dataloader = test_dataloader
         self.results = []
         self.schedule=schedule
         self.num_stages=num_stages
         self.algo = algo
+        self.arch = arch
     def reset_pruner(self):
         self.results=[]
 
@@ -19,16 +20,18 @@ class MultiStagePruner:
             break
         return list(i.shape[1:])
     
-    def prune(self,mask0,sparsity,base_level,grads=None,FILE=None):
+    def prune(self,mask0,sparsity,base_level,grads=None,FILE=None, arch=None):
         sparsities=generate_schedule(self.num_stages, base_level,sparsity,self.schedule)
         mask = torch.clone(mask0)
         input_dim = self.get_input_dim()
+        if arch is None:
+            arch = self.arch
         if self.num_stages > 1:
             grads=None
         for i,sparsity_stg in enumerate(sparsities):
             self.pruner.reset_pruner()
             start = time.time()
-            w_pruned,mask = self.pruner.prune(mask,sparsity_stg,grads=grads)
+            w_pruned,mask = self.pruner.prune(mask,sparsity_stg,grads=grads,arch=arch)
             end = time.time()
             print('Stage took', end-start)
             self.pruner.update_model(w_pruned)
