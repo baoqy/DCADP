@@ -564,7 +564,7 @@ def SM_ADMMSubProblem(arch, offsets, b_part1, max_sub, top_K_idx, y, grads,  w_s
         if itr_sub >= max_sub:
             break
     #print('itr:',itr,'d_rel:',d_rel,'r_rel',r_rel,'rho:',rho,'Knorm:',Knorm)
-    #print('SparseRes:',SparseRes,'SparseRatio:',SparseRatio,'BinaryRes:',BinaryRes,'BinaryRatio:',BinaryRatio)
+    print('SparseRes:',SparseRes,'SparseRatio:',SparseRatio,'BinaryRes:',BinaryRes,'BinaryRatio:',BinaryRatio)
     return w, v, s, SparseRatio, BinaryRatio, SparseRes, BinaryRes, top_K_idx
 
 #only one s value, ADMM subproblem
@@ -1136,7 +1136,10 @@ def ref_BBDCA(y, grads, lambda2, w_bar,  K, rho_delta, init_tol = 1e-6, rho_star
                         print('sy:',sy)
                         step = 0.1
                     elif iter_number % 2 == 0:
+<<<<<<< HEAD
                     #elif itr_in % 2 == 0:
+=======
+>>>>>>> 601517b13a297935f9cc63bd6cdcf23cb62481d1
                         step = sy /np.dot(yBB, yBB)
                     else:
                         step = np.dot(sBB,sBB)/sy
